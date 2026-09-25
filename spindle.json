@@ -1,11 +1,11 @@
 {
-  "version": "0.1.0",
+  "version": "0.2.0",
   "name": "Image Payload Injector",
   "identifier": "image_payload_injector",
   "author": "WanderingMonk8",
   "github": "https://github.com/WanderingMonk8/img-gen-payload-injector",
   "homepage": "https://github.com/WanderingMonk8/img-gen-payload-injector",
-  "description": "Save raw JSON request overrides on NanoGPT image connections.",
+  "description": "Inject NanoGPT image request JSON and generate from message toolbars.",
   "permissions": [],
   "entry_frontend": "dist/frontend.js"
 }
