@@ -1,6 +1,6 @@
 # Image Payload Injector
 
-A small [Lumiverse](https://lumiverse.chat/) extension for adding custom JSON fields to NanoGPT image generation requests. It also adds a one-click image generation shortcut to each message toolbar, immediately after the speaker button.
+A small [Lumiverse](https://lumiverse.chat/) extension for adding custom JSON fields to NanoGPT image generation requests. It also adds one-click image generation shortcuts to each message toolbar and right-click menu.
 
 ## Install
 
@@ -26,11 +26,11 @@ Open the **Image Payload Injector** drawer tab, select a NanoGPT image connectio
 
 The editor also accepts a captured `{ "body": { ... } }` object or a full NanoGPT capture with `request_example.body`. It saves every body field you enter without filtering. These fields are merged into future requests made through the selected connection. If you include `prompt` or `model`, those values may override Lumiverse's current prompt or selected model. **Clear override** removes the injected JSON while retaining the connection's other settings.
 
-## Message toolbar shortcut
+## Message shortcuts
 
-Hover a chat message and click the image icon after the speaker icon. The shortcut uses the active image connection, prompt mode, prompt preset, custom prompt fields, timeout settings, and connection defaults where the JSON override is stored.
+Hover a chat message and click the image icon after the speaker icon, or right-click a message and choose **Generate image** immediately before the TTS action. Both shortcuts use the active image connection, prompt mode, prompt preset, custom prompt fields, timeout settings, and connection defaults where the JSON override is stored.
 
-The shortcut follows the **Output** selection in Lumiverse's Image Gen pane:
+These shortcuts follow the **Output** selection in Lumiverse's Image Gen pane:
 
 - **Set as background** displays the result behind the chat using the configured opacity and transition.
 - **Insert into chat** creates Lumiverse's normal image generation message.

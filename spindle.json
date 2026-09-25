@@ -5,7 +5,7 @@
   "author": "WanderingMonk8",
   "github": "https://github.com/WanderingMonk8/img-gen-payload-injector",
   "homepage": "https://github.com/WanderingMonk8/img-gen-payload-injector",
-  "description": "Inject NanoGPT image request JSON and generate from message toolbars.",
+  "description": "Inject NanoGPT image request JSON and generate from message shortcuts.",
   "permissions": [],
   "entry_frontend": "dist/frontend.js",
   "minimum_lumiverse_version": "1.2.0"

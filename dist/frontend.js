@@ -55,6 +55,7 @@ export function setup(ctx) {
     .ipi-generate-button[aria-busy="true"] { color: var(--lumiverse-accent, #7c5cff) !important; }
     .ipi-generate-button.ipi-action-success { color: var(--lumiverse-success, #4caf72) !important; }
     .ipi-generate-button.ipi-action-error { color: var(--lumiverse-danger, #d44) !important; }
+    .ipi-context-generate svg { flex: 0 0 auto; }
     .ipi-spin { animation: ipi-spin 800ms linear infinite; }
     @keyframes ipi-spin { to { transform: rotate(360deg); } }
 
@@ -119,7 +120,7 @@ export function setup(ctx) {
         <button type="button" data-ipi-clear>Clear override</button>
         <button type="button" data-ipi-refresh>Refresh connections</button>
       </div>
-      <div class="ipi-note">Save applies to future generations from Lumiverse's image controls and the message toolbar shortcut when this connection is selected. JSON is merged into the outgoing request body. Fields such as prompt or model may replace Lumiverse's values.</div>
+      <div class="ipi-note">Save applies to future generations from Lumiverse's image controls, message toolbar shortcut, and message right-click menu when this connection is selected. JSON is merged into the outgoing request body. Fields such as prompt or model may replace Lumiverse's values.</div>
       <div class="ipi-status" data-ipi-status role="status" aria-live="polite"></div>
     </div>
   `
@@ -211,7 +212,7 @@ export function setup(ctx) {
       if (disposed) return
       connections = connections.map(item => item.id === updated.id ? updated : item)
       if (remove) editor.value = ''
-      message(remove ? 'Override cleared.' : 'Override saved. You can generate from Lumiverse or a message toolbar.')
+      message(remove ? 'Override cleared.' : 'Override saved. You can generate from Lumiverse or a message shortcut.')
     } catch (error) {
       if (!disposed) message(error.message, true)
     } finally {
@@ -258,6 +259,8 @@ export function setup(ctx) {
 
   function setGenerationState(activeButton, state) {
     for (const button of actionButtons) button.disabled = state === 'busy'
+    for (const button of document.querySelectorAll('.ipi-context-generate')) button.disabled = state === 'busy'
+    if (!activeButton) return
 
     activeButton.classList.remove('ipi-action-success', 'ipi-action-error')
     activeButton.removeAttribute('aria-busy')
@@ -294,6 +297,7 @@ export function setup(ctx) {
       }, 1800)
     }
     for (const actionButton of actionButtons) actionButton.disabled = false
+    for (const button of document.querySelectorAll('.ipi-context-generate')) button.disabled = false
     if (notice) showToast(notice, error)
   }
 
@@ -465,6 +469,38 @@ export function setup(ctx) {
     }
   }
 
+  function installContextMenuAction() {
+    for (const pencilIcon of document.querySelectorAll('svg.lucide-pencil')) {
+      const editButton = pencilIcon.closest('button')
+      const menu = editButton?.parentElement
+      if (!editButton || !menu || getComputedStyle(menu).position !== 'fixed') continue
+      if (menu.querySelector(':scope > .ipi-context-generate')) continue
+
+      const buttons = Array.from(menu.children).filter(element => element.tagName === 'BUTTON')
+      const editIndex = buttons.indexOf(editButton)
+      const copyButton = buttons[editIndex - 1]
+      if (editIndex < 1 || !copyButton?.querySelector('svg.lucide-copy')) continue
+
+      const ttsButton = buttons.slice(editIndex + 1).find(button => (
+        button.querySelector('svg.lucide-volume-2, svg.lucide-square')
+      ))
+      const insertionPoint = ttsButton || buttons[editIndex + 1]
+      if (!insertionPoint) continue
+
+      const button = editButton.cloneNode(false)
+      button.classList.add('ipi-context-generate')
+      button.disabled = generating
+      button.innerHTML = GENERATE_ICON.replace('width="13" height="13"', 'width="14" height="14"') + '<span>Generate image</span>'
+      button.addEventListener('click', (event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }))
+        generateFromMessage(null)
+      })
+      insertionPoint.before(button)
+    }
+  }
+
   function installMessageAction(messageId, messageElement) {
     const speakerIcon = messageElement.querySelector('svg.lucide-volume-2, svg.lucide-square')
     const toolbar = messageElement.querySelector('[data-component="BubbleActions"]') || speakerIcon?.closest('div')
@@ -505,6 +541,7 @@ export function setup(ctx) {
   function scanMessageActions() {
     scanFrame = null
     mountGeneratedBackground()
+    installContextMenuAction()
     const messages = typeof ctx.dom.listMessageElements === 'function'
       ? ctx.dom.listMessageElements()
       : []
