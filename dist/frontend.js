@@ -1,5 +1,4 @@
 const CONNECTIONS_URL = '/api/v1/image-gen-connections'
-const GENERATE_URL = '/api/v1/image-gen/generate'
 
 const GENERATE_ICON = `
   <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -207,6 +206,9 @@ export function setup(ctx) {
   let toastTimer = null
   let scanFrame = null
   let generating = false
+  let activeGenerationButton = null
+  let nativeCycleTimer = null
+  let generationTimeout = null
 
   function showToast(text, error = false) {
     if (!toast) return
@@ -246,48 +248,90 @@ export function setup(ctx) {
     }
   }
 
-  async function generateFromMessage(messageId, button) {
+  function finishGeneration(state = 'idle', notice = '', error = false) {
+    if (!generating) return
+    generating = false
+    if (nativeCycleTimer) clearTimeout(nativeCycleTimer)
+    if (generationTimeout) clearTimeout(generationTimeout)
+    nativeCycleTimer = null
+    generationTimeout = null
+
+    const button = activeGenerationButton
+    activeGenerationButton = null
+    if (button) {
+      setGenerationState(button, state)
+      setTimeout(() => {
+        if (!generating) setGenerationState(button, 'idle')
+      }, 1800)
+    }
+    for (const actionButton of actionButtons) actionButton.disabled = false
+    if (notice) showToast(notice, error)
+  }
+
+  async function getNativeGenerateButton() {
+    if (typeof ctx.ui.getBuiltInTabRoot !== 'function') {
+      throw new Error('This Lumiverse version does not expose the Image Generation panel to extensions.')
+    }
+
+    const root = ctx.ui.getBuiltInTabRoot('imagegen')
+    if (!root) throw new Error('Lumiverse could not open its Image Generation panel.')
+
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      const button = root.querySelector('button:has(svg.lucide-image)')
+      if (button) return button
+      await new Promise(resolve => requestAnimationFrame(resolve))
+    }
+    throw new Error('Lumiverse\'s Generate Now button was not found.')
+  }
+
+  function watchNativeGeneration(nativeButton) {
+    let sawDisabled = nativeButton.disabled
+    const check = () => {
+      if (!generating) return
+      if (nativeButton.disabled) {
+        sawDisabled = true
+      } else if (sawDisabled) {
+        const panelRoot = nativeButton.closest('[data-spindle-drawer-tab="imagegen"]')
+        const panelError = Array.from(panelRoot?.querySelectorAll('[class*="error"]') || [])
+          .map(element => element.textContent?.trim())
+          .find(Boolean)
+        finishGeneration(panelError ? 'error' : 'idle', panelError || '', !!panelError)
+        return
+      }
+      nativeCycleTimer = setTimeout(check, 150)
+    }
+    nativeCycleTimer = setTimeout(check, 0)
+    generationTimeout = setTimeout(() => finishGeneration('idle'), 10 * 60 * 1000)
+  }
+
+  async function generateWithNativePanel(button) {
     if (generating) return
-    const chatId = currentChatId()
-    if (!chatId) {
+    if (!currentChatId()) {
       showToast('Open a chat before generating an image.', true)
       return
     }
 
-    generating = true
-    setGenerationState(button, 'busy')
     try {
-      const result = await readJson(GENERATE_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify({
-          chatId,
-          forceGeneration: false,
-          attachToMessageId: messageId,
-          clientJobId: crypto.randomUUID(),
-        }),
-      })
-
-      if (result.generated) {
-        setGenerationState(button, 'success')
-        showToast('Image generated.')
-      } else {
-        const reason = result.reason || 'Lumiverse did not generate an image.'
-        setGenerationState(button, 'error')
-        button.title = reason
-        showToast(reason, true)
+      const nativeButton = await getNativeGenerateButton()
+      if (nativeButton.disabled) {
+        throw new Error('Image generation is unavailable. Select an image connection or wait for the current generation to finish.')
       }
+
+      generating = true
+      activeGenerationButton = button
+      setGenerationState(button, 'busy')
+      nativeButton.click()
+      showToast('Image generation started.')
+      watchNativeGeneration(nativeButton)
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
+      const raw = error instanceof Error ? error.message : String(error)
+      const detail = /permission/i.test(raw)
+        ? 'Grant this extension the UI Panels permission, then try again.'
+        : raw
       setGenerationState(button, 'error')
       button.title = detail
       showToast(detail, true)
-    } finally {
-      generating = false
-      for (const actionButton of actionButtons) actionButton.disabled = false
-      setTimeout(() => {
-        if (!button.getAttribute('aria-busy')) setGenerationState(button, 'idle')
-      }, 1800)
+      setTimeout(() => setGenerationState(button, 'idle'), 2400)
     }
   }
 
@@ -322,7 +366,7 @@ export function setup(ctx) {
     button.addEventListener('click', (event) => {
       event.preventDefault()
       event.stopPropagation()
-      void generateFromMessage(messageId, button)
+      void generateWithNativePanel(button)
     })
     actionWrappers.set(messageId, wrapper)
     actionButtons.add(button)
@@ -348,13 +392,34 @@ export function setup(ctx) {
   scheduleScan()
 
   const unsubscribeChatSwitched = ctx.events?.on?.('CHAT_SWITCHED', scheduleScan)
+  const unsubscribeImageProgress = ctx.events?.on?.('IMAGE_GEN_PROGRESS', (payload) => {
+    if (!generating || !activeGenerationButton || (payload?.chatId && payload.chatId !== currentChatId())) return
+    const step = Number(payload?.step)
+    const total = Number(payload?.totalSteps)
+    if (Number.isFinite(step) && Number.isFinite(total) && total > 0) {
+      activeGenerationButton.title = `Generating image... ${step}/${total}`
+    }
+  })
+  const unsubscribeImageComplete = ctx.events?.on?.('IMAGE_GEN_COMPLETE', (payload) => {
+    if (!generating || (payload?.chatId && payload.chatId !== currentChatId())) return
+    finishGeneration('success', 'Image generated.')
+  })
+  const unsubscribeImageError = ctx.events?.on?.('IMAGE_GEN_ERROR', (payload) => {
+    if (!generating || (payload?.chatId && payload.chatId !== currentChatId())) return
+    finishGeneration('error', payload?.message || 'Image generation failed.', true)
+  })
 
   return () => {
     disposed = true
     observer.disconnect()
     if (scanFrame !== null) cancelAnimationFrame(scanFrame)
     if (toastTimer) clearTimeout(toastTimer)
+    if (nativeCycleTimer) clearTimeout(nativeCycleTimer)
+    if (generationTimeout) clearTimeout(generationTimeout)
     if (typeof unsubscribeChatSwitched === 'function') unsubscribeChatSwitched()
+    if (typeof unsubscribeImageProgress === 'function') unsubscribeImageProgress()
+    if (typeof unsubscribeImageComplete === 'function') unsubscribeImageComplete()
+    if (typeof unsubscribeImageError === 'function') unsubscribeImageError()
     actionWrappers.clear()
     actionButtons.clear()
     tab.destroy()

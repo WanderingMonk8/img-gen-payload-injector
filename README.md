@@ -28,6 +28,6 @@ The editor also accepts a captured `{ "body": { ... } }` object or a full NanoGP
 
 ## Message toolbar shortcut
 
-Hover a chat message and click the image icon after the speaker icon. The shortcut calls Lumiverse's native image generation route with the current chat, clicked message, active image connection, saved prompt mode, output target, and other Image Generation settings. If the selected output target is **Attach to message**, the generated image is attached to the message whose toolbar you used.
+Hover a chat message and click the image icon after the speaker icon. The shortcut invokes Lumiverse's existing **Generate Now** control, so it uses the same active image connection, prompt mode, output target, preview flow, and other Image Generation settings. Grant the extension the **UI Panels** permission when Lumiverse asks; this lets the shortcut reach the built-in Image Generation panel.
 
 To install from a local copy, place the project under `data/extensions/image_payload_injector/` on the Lumiverse server and choose **Import Local** instead.
