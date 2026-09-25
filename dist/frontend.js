@@ -1,4 +1,6 @@
 const CONNECTIONS_URL = '/api/v1/image-gen-connections'
+const GENERATE_REQUEST = 'image_payload_injector_generate'
+const GENERATE_RESULT = 'image_payload_injector_generate_result'
 
 const GENERATE_ICON = `
   <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -207,8 +209,9 @@ export function setup(ctx) {
   let scanFrame = null
   let generating = false
   let activeGenerationButton = null
-  let nativeCycleTimer = null
   let generationTimeout = null
+  let pendingRequestId = null
+  let previewModal = null
 
   function showToast(text, error = false) {
     if (!toast) return
@@ -251,10 +254,9 @@ export function setup(ctx) {
   function finishGeneration(state = 'idle', notice = '', error = false) {
     if (!generating) return
     generating = false
-    if (nativeCycleTimer) clearTimeout(nativeCycleTimer)
     if (generationTimeout) clearTimeout(generationTimeout)
-    nativeCycleTimer = null
     generationTimeout = null
+    pendingRequestId = null
 
     const button = activeGenerationButton
     activeGenerationButton = null
@@ -268,71 +270,43 @@ export function setup(ctx) {
     if (notice) showToast(notice, error)
   }
 
-  async function getNativeGenerateButton() {
-    if (typeof ctx.ui.getBuiltInTabRoot !== 'function') {
-      throw new Error('This Lumiverse version does not expose the Image Generation panel to extensions.')
-    }
+  function showGeneratedImage(result) {
+    const src = result?.imageDataUrl || result?.imageUrl
+    if (!src || typeof ctx.ui.showModal !== 'function') return
 
-    const root = ctx.ui.getBuiltInTabRoot('imagegen')
-    if (!root) throw new Error('Lumiverse could not open its Image Generation panel.')
-
-    for (let attempt = 0; attempt < 80; attempt += 1) {
-      const button = root.querySelector('button:has(svg.lucide-image)')
-      if (button) return button
-      await new Promise(resolve => requestAnimationFrame(resolve))
-    }
-    throw new Error('Lumiverse\'s Generate Now button was not found.')
+    if (previewModal) previewModal.dismiss()
+    previewModal = ctx.ui.showModal({ title: 'Generated image', width: 720, maxHeight: 820 })
+    const image = document.createElement('img')
+    image.src = src
+    image.alt = 'Generated image'
+    image.style.cssText = 'display:block;width:100%;height:auto;max-height:720px;object-fit:contain;border-radius:var(--lumiverse-radius);'
+    previewModal.root.append(image)
+    previewModal.onDismiss(() => { previewModal = null })
   }
 
-  function watchNativeGeneration(nativeButton) {
-    let sawDisabled = nativeButton.disabled
-    const check = () => {
-      if (!generating) return
-      if (nativeButton.disabled) {
-        sawDisabled = true
-      } else if (sawDisabled) {
-        const panelRoot = nativeButton.closest('[data-spindle-drawer-tab="imagegen"]')
-        const panelError = Array.from(panelRoot?.querySelectorAll('[class*="error"]') || [])
-          .map(element => element.textContent?.trim())
-          .find(Boolean)
-        finishGeneration(panelError ? 'error' : 'idle', panelError || '', !!panelError)
-        return
-      }
-      nativeCycleTimer = setTimeout(check, 150)
-    }
-    nativeCycleTimer = setTimeout(check, 0)
-    generationTimeout = setTimeout(() => finishGeneration('idle'), 10 * 60 * 1000)
-  }
-
-  async function generateWithNativePanel(button) {
+  function generateFromMessage(messageId, button) {
     if (generating) return
-    if (!currentChatId()) {
+    const chatId = currentChatId()
+    if (!chatId) {
       showToast('Open a chat before generating an image.', true)
       return
     }
 
-    try {
-      const nativeButton = await getNativeGenerateButton()
-      if (nativeButton.disabled) {
-        throw new Error('Image generation is unavailable. Select an image connection or wait for the current generation to finish.')
-      }
-
-      generating = true
-      activeGenerationButton = button
-      setGenerationState(button, 'busy')
-      nativeButton.click()
-      showToast('Image generation started.')
-      watchNativeGeneration(nativeButton)
-    } catch (error) {
-      const raw = error instanceof Error ? error.message : String(error)
-      const detail = /permission/i.test(raw)
-        ? 'Grant this extension the UI Panels permission, then try again.'
-        : raw
-      setGenerationState(button, 'error')
-      button.title = detail
-      showToast(detail, true)
-      setTimeout(() => setGenerationState(button, 'idle'), 2400)
-    }
+    generating = true
+    activeGenerationButton = button
+    pendingRequestId = crypto.randomUUID()
+    setGenerationState(button, 'busy')
+    ctx.sendToBackend({
+      type: GENERATE_REQUEST,
+      requestId: pendingRequestId,
+      clientJobId: crypto.randomUUID(),
+      chatId,
+      messageId,
+    })
+    showToast('Image generation started.')
+    generationTimeout = setTimeout(() => {
+      finishGeneration('error', 'Image generation timed out.', true)
+    }, 10 * 60 * 1000)
   }
 
   function installMessageAction(messageId, messageElement) {
@@ -366,7 +340,7 @@ export function setup(ctx) {
     button.addEventListener('click', (event) => {
       event.preventDefault()
       event.stopPropagation()
-      void generateWithNativePanel(button)
+      generateFromMessage(messageId, button)
     })
     actionWrappers.set(messageId, wrapper)
     actionButtons.add(button)
@@ -392,21 +366,33 @@ export function setup(ctx) {
   scheduleScan()
 
   const unsubscribeChatSwitched = ctx.events?.on?.('CHAT_SWITCHED', scheduleScan)
+  const unsubscribeBackend = ctx.onBackendMessage((payload) => {
+    if (payload?.type !== GENERATE_RESULT || payload.requestId !== pendingRequestId) return
+
+    if (payload.error) {
+      const detail = /permission/i.test(payload.error)
+        ? 'Grant this extension the Image Generation permission, then try again.'
+        : payload.error
+      finishGeneration('error', detail, true)
+      return
+    }
+
+    const result = payload.result
+    if (!result?.generated) {
+      finishGeneration('error', result?.reason || 'Lumiverse did not generate an image.', true)
+      return
+    }
+
+    showGeneratedImage(result)
+    finishGeneration('success', 'Image generated.')
+  })
   const unsubscribeImageProgress = ctx.events?.on?.('IMAGE_GEN_PROGRESS', (payload) => {
     if (!generating || !activeGenerationButton || (payload?.chatId && payload.chatId !== currentChatId())) return
     const step = Number(payload?.step)
     const total = Number(payload?.totalSteps)
     if (Number.isFinite(step) && Number.isFinite(total) && total > 0) {
-      activeGenerationButton.title = `Generating image... ${step}/${total}`
+      activeGenerationButton.title = 'Generating image... ' + step + '/' + total
     }
-  })
-  const unsubscribeImageComplete = ctx.events?.on?.('IMAGE_GEN_COMPLETE', (payload) => {
-    if (!generating || (payload?.chatId && payload.chatId !== currentChatId())) return
-    finishGeneration('success', 'Image generated.')
-  })
-  const unsubscribeImageError = ctx.events?.on?.('IMAGE_GEN_ERROR', (payload) => {
-    if (!generating || (payload?.chatId && payload.chatId !== currentChatId())) return
-    finishGeneration('error', payload?.message || 'Image generation failed.', true)
   })
 
   return () => {
@@ -414,12 +400,11 @@ export function setup(ctx) {
     observer.disconnect()
     if (scanFrame !== null) cancelAnimationFrame(scanFrame)
     if (toastTimer) clearTimeout(toastTimer)
-    if (nativeCycleTimer) clearTimeout(nativeCycleTimer)
     if (generationTimeout) clearTimeout(generationTimeout)
+    if (previewModal) previewModal.dismiss()
     if (typeof unsubscribeChatSwitched === 'function') unsubscribeChatSwitched()
+    if (typeof unsubscribeBackend === 'function') unsubscribeBackend()
     if (typeof unsubscribeImageProgress === 'function') unsubscribeImageProgress()
-    if (typeof unsubscribeImageComplete === 'function') unsubscribeImageComplete()
-    if (typeof unsubscribeImageError === 'function') unsubscribeImageError()
     actionWrappers.clear()
     actionButtons.clear()
     tab.destroy()
