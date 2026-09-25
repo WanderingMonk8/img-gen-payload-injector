@@ -1,6 +1,7 @@
 const CONNECTIONS_URL = '/api/v1/image-gen-connections'
-const GENERATE_REQUEST = 'image_payload_injector_generate'
-const GENERATE_RESULT = 'image_payload_injector_generate_result'
+const IMAGE_GEN_SETTINGS_URL = '/api/v1/settings/imageGeneration'
+const GENERATE_URL = '/api/v1/image-gen/generate'
+const PENDING_IMAGE_SETTINGS_PREFIX = '__lumiverse_pending_image_generation_patch'
 
 const GENERATE_ICON = `
   <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -63,6 +64,29 @@ export function setup(ctx) {
     }
     [data-component="BubbleActions"]:not(:has(> button > svg.lucide-volume-2, > button > svg.lucide-square)) > button:nth-of-type(n+3) {
       order: 2;
+    }
+
+    .ipi-scene-background {
+      position: absolute; inset: 0; z-index: 0; pointer-events: none;
+      background-size: cover; background-position: center; background-repeat: no-repeat;
+      transition-property: opacity; transition-timing-function: ease;
+    }
+    .ipi-scene-scrim {
+      position: absolute; inset: 0; z-index: 1; pointer-events: none;
+      background:
+        linear-gradient(
+          180deg,
+          color-mix(in srgb, var(--lumiverse-scene-text-scrim) 88%, transparent) 0%,
+          color-mix(in srgb, var(--lumiverse-scene-text-scrim) 48%, transparent) 24%,
+          color-mix(in srgb, var(--lumiverse-scene-text-scrim) 26%, transparent) 52%,
+          color-mix(in srgb, var(--lumiverse-scene-text-scrim) 82%, transparent) 100%
+        ),
+        radial-gradient(
+          130% 95% at 50% 58%,
+          transparent 40%,
+          color-mix(in srgb, var(--lumiverse-scene-text-scrim) 35%, transparent) 100%
+        );
+      transition-property: opacity; transition-timing-function: ease;
     }
 
     .ipi-toast {
@@ -210,8 +234,11 @@ export function setup(ctx) {
   let generating = false
   let activeGenerationButton = null
   let generationTimeout = null
-  let pendingRequestId = null
+  let generationController = null
   let previewModal = null
+  let generatedBackground = null
+  let backgroundLayer = null
+  let backgroundScrim = null
 
   function showToast(text, error = false) {
     if (!toast) return
@@ -256,7 +283,7 @@ export function setup(ctx) {
     generating = false
     if (generationTimeout) clearTimeout(generationTimeout)
     generationTimeout = null
-    pendingRequestId = null
+    generationController = null
 
     const button = activeGenerationButton
     activeGenerationButton = null
@@ -284,7 +311,89 @@ export function setup(ctx) {
     previewModal.onDismiss(() => { previewModal = null })
   }
 
-  function generateFromMessage(messageId, button) {
+  function removeGeneratedBackground() {
+    backgroundLayer?.remove()
+    backgroundScrim?.remove()
+    backgroundLayer = null
+    backgroundScrim = null
+  }
+
+  function mountGeneratedBackground() {
+    if (!generatedBackground) return
+    const chatView = document.querySelector('[data-component="ChatView"]')
+    if (!chatView) return
+    if (backgroundLayer?.parentElement === chatView && backgroundScrim?.parentElement === chatView) return
+
+    removeGeneratedBackground()
+    backgroundLayer = document.createElement('div')
+    backgroundLayer.className = 'ipi-scene-background'
+    backgroundLayer.style.backgroundImage = 'url("' + generatedBackground.src.replaceAll('"', '%22') + '")'
+    backgroundLayer.style.opacity = String(generatedBackground.opacity)
+    backgroundLayer.style.transitionDuration = generatedBackground.transitionMs + 'ms'
+
+    backgroundScrim = document.createElement('div')
+    backgroundScrim.className = 'ipi-scene-scrim'
+    backgroundScrim.style.opacity = '1'
+    backgroundScrim.style.transitionDuration = generatedBackground.transitionMs + 'ms'
+
+    chatView.append(backgroundLayer, backgroundScrim)
+  }
+
+  function applyGeneratedBackground(result, settings) {
+    const src = result?.imageDataUrl || result?.imageUrl
+    if (!src) throw new Error('Lumiverse did not return an image for the background.')
+
+    const rawOpacity = Number(settings.backgroundOpacity)
+    const rawTransition = Number(settings.fadeTransitionMs)
+    generatedBackground = {
+      src,
+      opacity: Number.isFinite(rawOpacity) ? Math.max(0, Math.min(1, rawOpacity)) : 0.35,
+      transitionMs: Number.isFinite(rawTransition) ? Math.max(100, rawTransition) : 800,
+    }
+    mountGeneratedBackground()
+  }
+
+  function getPendingImageGenerationSettings() {
+    try {
+      const matches = []
+      for (let index = 0; index < localStorage.length; index += 1) {
+        const key = localStorage.key(index)
+        if (key !== PENDING_IMAGE_SETTINGS_PREFIX && !key?.startsWith(PENDING_IMAGE_SETTINGS_PREFIX + ':')) continue
+        const value = JSON.parse(localStorage.getItem(key) || '{}')
+        if (value && typeof value === 'object' && !Array.isArray(value)) matches.push(value)
+      }
+      return matches.length === 1 ? matches[0] : {}
+    } catch {
+      return {}
+    }
+  }
+
+  async function getImageGenerationSettings() {
+    let value = {}
+    try {
+      const row = await readJson(IMAGE_GEN_SETTINGS_URL)
+      value = row?.value
+      if (typeof value === 'string') {
+        try { value = JSON.parse(value) }
+        catch { value = {} }
+      }
+    } catch {
+      value = {}
+    }
+    const saved = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+    return { ...saved, ...getPendingImageGenerationSettings() }
+  }
+
+  async function getLastMessageId(chatId) {
+    const encodedChatId = encodeURIComponent(chatId)
+    const result = await readJson('/api/v1/chats/' + encodedChatId + '/messages?tail=true&limit=1')
+    const lastMessage = Array.isArray(result?.data) ? result.data[result.data.length - 1] : null
+    if (!lastMessage?.id) throw new Error('There is no message to attach the image to.')
+    return lastMessage.id
+  }
+
+  // The extension worker API forces preview output; this is the same route used by ImageGenPanel.
+  async function generateFromMessage(button) {
     if (generating) return
     const chatId = currentChatId()
     if (!chatId) {
@@ -294,19 +403,66 @@ export function setup(ctx) {
 
     generating = true
     activeGenerationButton = button
-    pendingRequestId = crypto.randomUUID()
     setGenerationState(button, 'busy')
-    ctx.sendToBackend({
-      type: GENERATE_REQUEST,
-      requestId: pendingRequestId,
-      clientJobId: crypto.randomUUID(),
-      chatId,
-      messageId,
-    })
     showToast('Image generation started.')
-    generationTimeout = setTimeout(() => {
-      finishGeneration('error', 'Image generation timed out.', true)
-    }, 10 * 60 * 1000)
+
+    const controller = new AbortController()
+    generationController = controller
+    generationTimeout = setTimeout(() => controller.abort(), 10 * 60 * 1000)
+
+    try {
+      const settings = await getImageGenerationSettings()
+      const allowedTargets = new Set(['background', 'chat_attachment', 'attach_to_message', 'preview'])
+      const outputTarget = allowedTargets.has(settings.outputTarget) ? settings.outputTarget : 'background'
+      const attachToMessageId = outputTarget === 'attach_to_message'
+        ? await getLastMessageId(chatId)
+        : undefined
+
+      const result = await readJson(GENERATE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          chatId,
+          forceGeneration: false,
+          promptMode: settings.promptMode,
+          prompt: settings.customPrompt,
+          negativePrompt: settings.customNegativePrompt,
+          promptPresetId: settings.activePromptPresetId ?? null,
+          outputTarget,
+          bypassCharacterLora: !!settings.bypassCharacterLora,
+          bypassActiveLoraPreset: !!settings.bypassActiveLoraPreset,
+          loraStrengthScale: settings.loraStrengthScale,
+          attachToMessageId,
+          clientJobId: crypto.randomUUID(),
+          promptGenerationTimeoutSeconds: settings.promptGenerationTimeoutSeconds,
+          generationTimeoutSeconds: settings.generationTimeoutSeconds,
+        }),
+      })
+
+      if (!result?.generated) {
+        finishGeneration('error', result?.reason || 'Lumiverse did not generate an image.', true)
+        return
+      }
+
+      if (outputTarget === 'background') {
+        applyGeneratedBackground(result, settings)
+        finishGeneration('success', 'Image set as the chat background.')
+      } else if (outputTarget === 'preview') {
+        showGeneratedImage(result)
+        finishGeneration('success', 'Image generated for preview.')
+      } else if (outputTarget === 'chat_attachment') {
+        finishGeneration('success', 'Image inserted into the chat.')
+      } else {
+        finishGeneration('success', 'Image attached to the last message.')
+      }
+    } catch (error) {
+      const timedOut = error?.name === 'AbortError'
+      const detail = timedOut
+        ? 'Image generation timed out.'
+        : error instanceof Error ? error.message : String(error)
+      finishGeneration('error', detail, true)
+    }
   }
 
   function installMessageAction(messageId, messageElement) {
@@ -340,7 +496,7 @@ export function setup(ctx) {
     button.addEventListener('click', (event) => {
       event.preventDefault()
       event.stopPropagation()
-      generateFromMessage(messageId, button)
+      generateFromMessage(button)
     })
     actionWrappers.set(messageId, wrapper)
     actionButtons.add(button)
@@ -348,6 +504,7 @@ export function setup(ctx) {
 
   function scanMessageActions() {
     scanFrame = null
+    mountGeneratedBackground()
     const messages = typeof ctx.dom.listMessageElements === 'function'
       ? ctx.dom.listMessageElements()
       : []
@@ -366,26 +523,6 @@ export function setup(ctx) {
   scheduleScan()
 
   const unsubscribeChatSwitched = ctx.events?.on?.('CHAT_SWITCHED', scheduleScan)
-  const unsubscribeBackend = ctx.onBackendMessage((payload) => {
-    if (payload?.type !== GENERATE_RESULT || payload.requestId !== pendingRequestId) return
-
-    if (payload.error) {
-      const detail = /permission/i.test(payload.error)
-        ? 'Grant this extension the Image Generation permission, then try again.'
-        : payload.error
-      finishGeneration('error', detail, true)
-      return
-    }
-
-    const result = payload.result
-    if (!result?.generated) {
-      finishGeneration('error', result?.reason || 'Lumiverse did not generate an image.', true)
-      return
-    }
-
-    showGeneratedImage(result)
-    finishGeneration('success', 'Image generated.')
-  })
   const unsubscribeImageProgress = ctx.events?.on?.('IMAGE_GEN_PROGRESS', (payload) => {
     if (!generating || !activeGenerationButton || (payload?.chatId && payload.chatId !== currentChatId())) return
     const step = Number(payload?.step)
@@ -401,9 +538,10 @@ export function setup(ctx) {
     if (scanFrame !== null) cancelAnimationFrame(scanFrame)
     if (toastTimer) clearTimeout(toastTimer)
     if (generationTimeout) clearTimeout(generationTimeout)
+    generationController?.abort()
     if (previewModal) previewModal.dismiss()
+    removeGeneratedBackground()
     if (typeof unsubscribeChatSwitched === 'function') unsubscribeChatSwitched()
-    if (typeof unsubscribeBackend === 'function') unsubscribeBackend()
     if (typeof unsubscribeImageProgress === 'function') unsubscribeImageProgress()
     actionWrappers.clear()
     actionButtons.clear()

@@ -10,7 +10,7 @@ In Lumiverse, open **Extensions → Add Extension → Install from Source** and 
 https://github.com/WanderingMonk8/img-gen-payload-injector
 ```
 
-Requires Lumiverse 1.2.0 or newer. Enable the extension and grant its **Image Generation** permission.
+Requires Lumiverse 1.2.0 or newer. Enable the extension after installation.
 
 ## Use
 
@@ -28,8 +28,15 @@ The editor also accepts a captured `{ "body": { ... } }` object or a full NanoGP
 
 ## Message toolbar shortcut
 
-Hover a chat message and click the image icon after the speaker icon. The frontend sends the request to the extension backend, which invokes Lumiverse's native image generation pipeline through `spindle.imageGen`. It uses the active image connection and the native scene or custom prompt pipeline, including the connection defaults where the JSON override is stored.
+Hover a chat message and click the image icon after the speaker icon. The shortcut uses the active image connection, prompt mode, prompt preset, custom prompt fields, timeout settings, and connection defaults where the JSON override is stored.
 
-The generated image opens in a Lumiverse preview modal. Errors from Lumiverse or the image provider appear in a toast instead of leaving the button spinning.
+The shortcut follows the **Output** selection in Lumiverse's Image Gen pane:
+
+- **Set as background** displays the result behind the chat using the configured opacity and transition.
+- **Insert into chat** creates Lumiverse's normal image generation message.
+- **Attach to last message** resolves and updates the actual last chat message.
+- **Preview only** opens the result in a Lumiverse preview modal.
+
+Errors from Lumiverse or the image provider appear in a toast instead of leaving the button spinning.
 
 To install from a local copy, place the project under `data/extensions/image_payload_injector/` on the Lumiverse server and choose **Import Local**.

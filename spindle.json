@@ -1,15 +1,12 @@
 {
-  "version": "0.3.0",
+  "version": "0.4.0",
   "name": "Image Payload Injector",
   "identifier": "image_payload_injector",
   "author": "WanderingMonk8",
   "github": "https://github.com/WanderingMonk8/img-gen-payload-injector",
   "homepage": "https://github.com/WanderingMonk8/img-gen-payload-injector",
   "description": "Inject NanoGPT image request JSON and generate from message toolbars.",
-  "permissions": [
-    "image_gen"
-  ],
+  "permissions": [],
   "entry_frontend": "dist/frontend.js",
-  "entry_backend": "dist/backend.js",
   "minimum_lumiverse_version": "1.2.0"
 }
