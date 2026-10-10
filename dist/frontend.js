@@ -52,9 +52,12 @@ export function setup(ctx) {
 
     .ipi-action-root { display: contents; }
     .ipi-generate-button { order: 1; }
-    .ipi-generate-button[aria-busy="true"] { color: var(--lumiverse-accent, #7c5cff) !important; }
-    .ipi-generate-button.ipi-action-success { color: var(--lumiverse-success, #4caf72) !important; }
-    .ipi-generate-button.ipi-action-error { color: var(--lumiverse-danger, #d44) !important; }
+    .ipi-generate-button[aria-busy="true"],
+    .ipi-context-generate[aria-busy="true"] { color: var(--lumiverse-accent, #7c5cff) !important; }
+    .ipi-generate-button.ipi-action-success,
+    .ipi-context-generate.ipi-action-success { color: var(--lumiverse-success, #4caf72) !important; }
+    .ipi-generate-button.ipi-action-error,
+    .ipi-context-generate.ipi-action-error { color: var(--lumiverse-danger, #d44) !important; }
     .ipi-context-generate svg { flex: 0 0 auto; }
     .ipi-spin { animation: ipi-spin 800ms linear infinite; }
     @keyframes ipi-spin { to { transform: rotate(360deg); } }
@@ -233,7 +236,9 @@ export function setup(ctx) {
   let toastTimer = null
   let scanFrame = null
   let generating = false
-  let activeGenerationButton = null
+  let generationState = 'idle'
+  let generationProgress = ''
+  let stateResetTimer = null
   let generationTimeout = null
   let generationController = null
   let previewModal = null
@@ -257,27 +262,47 @@ export function setup(ctx) {
     catch { return match[1] }
   }
 
-  function setGenerationState(activeButton, state) {
-    for (const button of actionButtons) button.disabled = state === 'busy'
-    for (const button of document.querySelectorAll('.ipi-context-generate')) button.disabled = state === 'busy'
-    if (!activeButton) return
+  function renderGenerationButton(button, state, progress = '') {
+    const isContextAction = button.classList.contains('ipi-context-generate')
+    const sizedIcon = markup => isContextAction
+      ? markup.replace('width="13" height="13"', 'width="14" height="14"')
+      : markup
+    let icon = sizedIcon(GENERATE_ICON)
+    let label = 'Generate image'
 
-    activeButton.classList.remove('ipi-action-success', 'ipi-action-error')
-    activeButton.removeAttribute('aria-busy')
-    activeButton.innerHTML = GENERATE_ICON
-    activeButton.title = 'Generate image'
-    activeButton.setAttribute('aria-label', 'Generate image')
+    button.disabled = state === 'busy'
+    button.classList.remove('ipi-action-success', 'ipi-action-error')
+    button.removeAttribute('aria-busy')
 
     if (state === 'busy') {
-      activeButton.innerHTML = SPINNER_ICON
-      activeButton.title = 'Generating image...'
-      activeButton.setAttribute('aria-label', 'Generating image')
-      activeButton.setAttribute('aria-busy', 'true')
+      icon = sizedIcon(SPINNER_ICON)
+      label = progress ? `Generating image... ${progress}` : 'Generating image...'
+      button.setAttribute('aria-busy', 'true')
     } else if (state === 'success') {
-      activeButton.classList.add('ipi-action-success')
-      activeButton.title = 'Image generated'
+      label = 'Image generated'
+      button.classList.add('ipi-action-success')
     } else if (state === 'error') {
-      activeButton.classList.add('ipi-action-error')
+      label = 'Generation failed'
+      button.classList.add('ipi-action-error')
+    }
+
+    button.innerHTML = icon + (isContextAction ? `<span>${label}</span>` : '')
+    button.title = label
+    button.setAttribute('aria-label', label)
+  }
+
+  function setGenerationState(state, progress = '') {
+    generationState = state
+    generationProgress = progress
+    for (const button of [...actionButtons]) {
+      if (!button.isConnected) {
+        actionButtons.delete(button)
+        continue
+      }
+      renderGenerationButton(button, state, progress)
+    }
+    for (const button of document.querySelectorAll('.ipi-context-generate')) {
+      renderGenerationButton(button, state, progress)
     }
   }
 
@@ -288,16 +313,12 @@ export function setup(ctx) {
     generationTimeout = null
     generationController = null
 
-    const button = activeGenerationButton
-    activeGenerationButton = null
-    if (button) {
-      setGenerationState(button, state)
-      setTimeout(() => {
-        if (!generating) setGenerationState(button, 'idle')
-      }, 1800)
-    }
-    for (const actionButton of actionButtons) actionButton.disabled = false
-    for (const button of document.querySelectorAll('.ipi-context-generate')) button.disabled = false
+    setGenerationState(state)
+    if (stateResetTimer) clearTimeout(stateResetTimer)
+    stateResetTimer = setTimeout(() => {
+      stateResetTimer = null
+      if (!generating) setGenerationState('idle')
+    }, 1800)
     if (notice) showToast(notice, error)
   }
 
@@ -397,7 +418,7 @@ export function setup(ctx) {
   }
 
   // The extension worker API forces preview output; this is the same route used by ImageGenPanel.
-  async function generateFromMessage(button) {
+  async function generateFromMessage() {
     if (generating) return
     const chatId = currentChatId()
     if (!chatId) {
@@ -406,8 +427,9 @@ export function setup(ctx) {
     }
 
     generating = true
-    activeGenerationButton = button
-    setGenerationState(button, 'busy')
+    if (stateResetTimer) clearTimeout(stateResetTimer)
+    stateResetTimer = null
+    setGenerationState('busy')
     showToast('Image generation started.')
 
     const controller = new AbortController()
@@ -489,13 +511,12 @@ export function setup(ctx) {
 
       const button = editButton.cloneNode(false)
       button.classList.add('ipi-context-generate')
-      button.disabled = generating
-      button.innerHTML = GENERATE_ICON.replace('width="13" height="13"', 'width="14" height="14"') + '<span>Generate image</span>'
+      renderGenerationButton(button, generationState, generationProgress)
       button.addEventListener('click', (event) => {
         event.preventDefault()
         event.stopPropagation()
         document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }))
-        generateFromMessage(null)
+        generateFromMessage()
       })
       insertionPoint.before(button)
     }
@@ -517,6 +538,11 @@ export function setup(ctx) {
         if (mount) mount.insertAdjacentElement('beforebegin', existing)
         else speakerButton.insertAdjacentElement('afterend', existing)
       }
+      const existingButton = existing.querySelector('.ipi-generate-button')
+      if (existingButton) {
+        actionButtons.add(existingButton)
+        renderGenerationButton(existingButton, generationState, generationProgress)
+      }
       return
     }
 
@@ -532,10 +558,11 @@ export function setup(ctx) {
     button.addEventListener('click', (event) => {
       event.preventDefault()
       event.stopPropagation()
-      generateFromMessage(button)
+      generateFromMessage()
     })
     actionWrappers.set(messageId, wrapper)
     actionButtons.add(button)
+    renderGenerationButton(button, generationState, generationProgress)
   }
 
   function scanMessageActions() {
@@ -561,11 +588,11 @@ export function setup(ctx) {
 
   const unsubscribeChatSwitched = ctx.events?.on?.('CHAT_SWITCHED', scheduleScan)
   const unsubscribeImageProgress = ctx.events?.on?.('IMAGE_GEN_PROGRESS', (payload) => {
-    if (!generating || !activeGenerationButton || (payload?.chatId && payload.chatId !== currentChatId())) return
+    if (!generating || (payload?.chatId && payload.chatId !== currentChatId())) return
     const step = Number(payload?.step)
     const total = Number(payload?.totalSteps)
     if (Number.isFinite(step) && Number.isFinite(total) && total > 0) {
-      activeGenerationButton.title = 'Generating image... ' + step + '/' + total
+      setGenerationState('busy', step + '/' + total)
     }
   })
 
@@ -575,6 +602,7 @@ export function setup(ctx) {
     if (scanFrame !== null) cancelAnimationFrame(scanFrame)
     if (toastTimer) clearTimeout(toastTimer)
     if (generationTimeout) clearTimeout(generationTimeout)
+    if (stateResetTimer) clearTimeout(stateResetTimer)
     generationController?.abort()
     if (previewModal) previewModal.dismiss()
     removeGeneratedBackground()
