@@ -59,7 +59,11 @@ export function setup(ctx) {
     .ipi-generate-button.ipi-action-error,
     .ipi-context-generate.ipi-action-error { color: var(--lumiverse-danger, #d44) !important; }
     .ipi-context-generate svg { flex: 0 0 auto; }
-    .ipi-spin { animation: ipi-spin 800ms linear infinite; }
+    .ipi-spin {
+      animation: ipi-spin 800ms linear infinite;
+      transform-box: fill-box;
+      transform-origin: center;
+    }
     @keyframes ipi-spin { to { transform: rotate(360deg); } }
 
     [data-component="BubbleActions"] > button:has(> svg.lucide-volume-2) ~ button,
@@ -268,6 +272,7 @@ export function setup(ctx) {
       ? markup.replace('width="13" height="13"', 'width="14" height="14"')
       : markup
     let icon = sizedIcon(GENERATE_ICON)
+    let iconState = 'generate'
     let label = 'Generate image'
 
     button.disabled = state === 'busy'
@@ -276,6 +281,7 @@ export function setup(ctx) {
 
     if (state === 'busy') {
       icon = sizedIcon(SPINNER_ICON)
+      iconState = 'spinner'
       label = progress ? `Generating image... ${progress}` : 'Generating image...'
       button.setAttribute('aria-busy', 'true')
     } else if (state === 'success') {
@@ -286,7 +292,13 @@ export function setup(ctx) {
       button.classList.add('ipi-action-error')
     }
 
-    button.innerHTML = icon + (isContextAction ? `<span>${label}</span>` : '')
+    if (button.dataset.ipiIconState !== iconState) {
+      button.innerHTML = icon + (isContextAction ? `<span>${label}</span>` : '')
+      button.dataset.ipiIconState = iconState
+    } else if (isContextAction) {
+      const labelElement = button.querySelector(':scope > span')
+      if (labelElement && labelElement.textContent !== label) labelElement.textContent = label
+    }
     button.title = label
     button.setAttribute('aria-label', label)
   }
