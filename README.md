@@ -34,7 +34,7 @@ These shortcuts follow the **Output** selection in Lumiverse's Image Gen pane:
 
 - **Set as background** displays the result behind the chat using the configured opacity and transition.
 - **Insert into chat** creates Lumiverse's normal image generation message.
-- **Attach to last message** resolves and updates the actual last chat message.
+- **Attach to last message** attaches the result to the message whose shortcut was used. It falls back to the last message when generation is started without a message target.
 - **Preview only** opens the result in a Lumiverse preview modal.
 
 Errors from Lumiverse or the image provider appear in a toast instead of leaving the button spinning.

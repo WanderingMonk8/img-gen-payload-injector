@@ -524,7 +524,7 @@ export function setup(ctx) {
       const allowedTargets = new Set(['background', 'chat_attachment', 'attach_to_message', 'preview'])
       const outputTarget = allowedTargets.has(settings.outputTarget) ? settings.outputTarget : 'background'
       const attachToMessageId = outputTarget === 'attach_to_message'
-        ? await getLastMessageId(chatId)
+        ? messageId || await getLastMessageId(chatId)
         : undefined
       const resolvedPrompt = await resolveMessagePrompt(chatId, messageId, settings)
 
@@ -564,7 +564,9 @@ export function setup(ctx) {
       } else if (outputTarget === 'chat_attachment') {
         finishGeneration('success', 'Image inserted into the chat.')
       } else {
-        finishGeneration('success', 'Image attached to the last message.')
+        finishGeneration('success', messageId
+          ? 'Image attached to the selected message.'
+          : 'Image attached to the last message.')
       }
     } catch (error) {
       const timedOut = error?.name === 'AbortError'
