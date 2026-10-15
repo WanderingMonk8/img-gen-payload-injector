@@ -449,17 +449,37 @@ export function setup(ctx) {
 
     const parsedLimit = Math.floor(Number(requestedLimit))
     const limit = Number.isFinite(parsedLimit) ? Math.max(1, Math.min(200, parsedLimit)) : 3
-    const offset = Math.max(0, selectedIndex - limit + 1)
-    const count = selectedIndex - offset + 1
+    const contextIds = ids.slice(Math.max(0, selectedIndex - limit + 1), selectedIndex + 1)
+    const remainingIds = new Set(contextIds)
+    const messagesById = new Map()
     const encodedChatId = encodeURIComponent(chatId)
-    const result = await readJson(
-      '/api/v1/chats/' + encodedChatId + '/messages?offset=' + offset + '&limit=' + count,
-    )
-    const messages = Array.isArray(result?.data) ? result.data : []
-    const selectedResultIndex = messages.findIndex(message => message?.id === messageId)
-    if (selectedResultIndex < 0) throw new Error('Could not load the selected message context.')
+    let offset = 0
+    let total = Infinity
 
-    return messages.slice(0, selectedResultIndex + 1).map(message => {
+    // The visible store follows the active branch, while the paginated API can
+    // include messages from other branches. Match by id instead of assuming
+    // that a visible message index is also a database offset.
+    while (remainingIds.size > 0 && offset < total) {
+      const result = await readJson(
+        '/api/v1/chats/' + encodedChatId + '/messages?offset=' + offset + '&limit=1000',
+      )
+      const page = Array.isArray(result?.data) ? result.data : []
+      for (const message of page) {
+        if (!remainingIds.has(message?.id)) continue
+        messagesById.set(message.id, message)
+        remainingIds.delete(message.id)
+      }
+      const reportedTotal = Number(result?.total)
+      total = Number.isFinite(reportedTotal)
+        ? reportedTotal
+        : page.length < 1000 ? offset + page.length : Infinity
+      if (page.length === 0) break
+      offset += page.length
+    }
+
+    if (!messagesById.has(messageId)) throw new Error('Could not load the selected message context.')
+    const messages = contextIds.map(id => messagesById.get(id)).filter(Boolean)
+    return messages.map(message => {
       const fallbackName = message?.is_user ? 'User' : 'Assistant'
       const name = String(message?.name || fallbackName).trim() || fallbackName
       return name + ': ' + String(message?.content || '')
