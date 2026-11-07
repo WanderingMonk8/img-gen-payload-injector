@@ -2,6 +2,7 @@ const CONNECTIONS_URL = '/api/v1/image-gen-connections'
 const IMAGE_GEN_SETTINGS_URL = '/api/v1/settings/imageGeneration'
 const GENERATE_URL = '/api/v1/image-gen/generate'
 const PENDING_IMAGE_SETTINGS_PREFIX = '__lumiverse_pending_image_generation_patch'
+const LONG_PRESS_MS = 650
 
 const GENERATE_ICON = `
   <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -58,6 +59,12 @@ export function setup(ctx) {
     .ipi-context-generate.ipi-action-success { color: var(--lumiverse-success, #4caf72) !important; }
     .ipi-generate-button.ipi-action-error,
     .ipi-context-generate.ipi-action-error { color: var(--lumiverse-danger, #d44) !important; }
+    .ipi-generate-button.ipi-auto-enabled,
+    .ipi-context-generate.ipi-auto-enabled {
+      background: color-mix(in srgb, var(--lumiverse-accent, #7c5cff) 20%, transparent) !important;
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lumiverse-accent, #7c5cff) 72%, transparent);
+    }
+    .ipi-generate-button.ipi-auto-enabled { color: var(--lumiverse-accent, #7c5cff) !important; }
     .ipi-context-generate svg { flex: 0 0 auto; }
     .ipi-spin {
       animation: ipi-spin 800ms linear infinite;
@@ -250,6 +257,8 @@ export function setup(ctx) {
   let backgroundLayer = null
   let backgroundScrim = null
   let contextMenuMessageId = null
+  let autoGenerationEnabled = false
+  let autoToggleBusy = false
 
   function showToast(text, error = false) {
     if (!toast) return
@@ -293,15 +302,24 @@ export function setup(ctx) {
       button.classList.add('ipi-action-error')
     }
 
+    button.classList.toggle('ipi-auto-enabled', autoGenerationEnabled)
+    button.setAttribute('aria-pressed', String(autoGenerationEnabled))
+    const visibleLabel = autoGenerationEnabled && state === 'idle'
+      ? 'Generate image (Auto)'
+      : label
+    const holdHint = autoGenerationEnabled
+      ? 'Auto generation is on. Hold to disable.'
+      : 'Hold to enable auto generation.'
+
     if (button.dataset.ipiIconState !== iconState) {
-      button.innerHTML = icon + (isContextAction ? `<span>${label}</span>` : '')
+      button.innerHTML = icon + (isContextAction ? `<span>${visibleLabel}</span>` : '')
       button.dataset.ipiIconState = iconState
     } else if (isContextAction) {
       const labelElement = button.querySelector(':scope > span')
-      if (labelElement && labelElement.textContent !== label) labelElement.textContent = label
+      if (labelElement && labelElement.textContent !== visibleLabel) labelElement.textContent = visibleLabel
     }
-    button.title = label
-    button.setAttribute('aria-label', label)
+    button.title = label + '. ' + holdHint
+    button.setAttribute('aria-label', label + '. ' + holdHint)
   }
 
   function setGenerationState(state, progress = '') {
@@ -420,6 +438,62 @@ export function setup(ctx) {
     }
     const saved = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
     return { ...saved, ...getPendingImageGenerationSettings() }
+  }
+
+  function updatePendingAutoGenerationSetting(enabled) {
+    try {
+      for (let index = 0; index < localStorage.length; index += 1) {
+        const key = localStorage.key(index)
+        if (key !== PENDING_IMAGE_SETTINGS_PREFIX && !key?.startsWith(PENDING_IMAGE_SETTINGS_PREFIX + ':')) continue
+        const current = JSON.parse(localStorage.getItem(key) || '{}')
+        if (!current || typeof current !== 'object' || Array.isArray(current)) continue
+        localStorage.setItem(key, JSON.stringify({ ...current, enabled: enabled || current.enabled, autoGenerate: enabled }))
+      }
+    } catch {
+      // The persisted settings write remains authoritative when storage is unavailable.
+    }
+  }
+
+  async function refreshAutoGenerationState() {
+    try {
+      const settings = await getImageGenerationSettings()
+      if (disposed) return
+      autoGenerationEnabled = settings.enabled === true && settings.autoGenerate !== false
+      setGenerationState(generationState, generationProgress)
+    } catch {}
+  }
+
+  async function toggleAutoGeneration() {
+    if (autoToggleBusy) return
+    autoToggleBusy = true
+    try {
+      const settings = await getImageGenerationSettings()
+      autoGenerationEnabled = settings.enabled === true && settings.autoGenerate !== false
+      const enabled = !autoGenerationEnabled
+      const nextSettings = {
+        ...settings,
+        enabled: enabled ? true : settings.enabled,
+        autoGenerate: enabled,
+      }
+      await readJson(IMAGE_GEN_SETTINGS_URL, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({ value: nextSettings }),
+      })
+      if (disposed) return
+      updatePendingAutoGenerationSetting(enabled)
+      autoGenerationEnabled = enabled
+      setGenerationState(generationState, generationProgress)
+      showToast(enabled
+        ? 'Auto image generation enabled.'
+        : 'Auto image generation disabled.')
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      showToast('Could not update auto image generation: ' + detail, true)
+      void refreshAutoGenerationState()
+    } finally {
+      autoToggleBusy = false
+    }
   }
 
   async function getLastMessageId(chatId) {
@@ -597,6 +671,57 @@ export function setup(ctx) {
     }
   }
 
+  function bindGenerationButton(button, getMessageId, closeMenu = false) {
+    let pressTimer = null
+    let pressStartX = 0
+    let pressStartY = 0
+    let suppressClick = false
+
+    const cancelLongPress = () => {
+      if (pressTimer) clearTimeout(pressTimer)
+      pressTimer = null
+    }
+
+    button.addEventListener('pointerdown', (event) => {
+      if ((event.pointerType === 'mouse' && event.button !== 0) || button.disabled) return
+      cancelLongPress()
+      suppressClick = false
+      pressStartX = event.clientX
+      pressStartY = event.clientY
+      pressTimer = setTimeout(() => {
+        pressTimer = null
+        suppressClick = true
+        void toggleAutoGeneration()
+      }, LONG_PRESS_MS)
+    })
+    button.addEventListener('pointermove', (event) => {
+      if (!pressTimer) return
+      if (Math.hypot(event.clientX - pressStartX, event.clientY - pressStartY) > 12) {
+        cancelLongPress()
+      }
+    })
+    button.addEventListener('pointerup', cancelLongPress)
+    button.addEventListener('pointercancel', cancelLongPress)
+    button.addEventListener('pointerleave', (event) => {
+      if (event.pointerType === 'mouse') cancelLongPress()
+    })
+    button.addEventListener('contextmenu', (event) => {
+      if (pressTimer || suppressClick) event.preventDefault()
+    })
+    button.addEventListener('click', (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      if (closeMenu) {
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }))
+      }
+      if (suppressClick) {
+        suppressClick = false
+        return
+      }
+      void generateFromMessage(getMessageId())
+    })
+  }
+
   function installContextMenuAction() {
     for (const pencilIcon of document.querySelectorAll('svg.lucide-pencil')) {
       const editButton = pencilIcon.closest('button')
@@ -618,12 +743,7 @@ export function setup(ctx) {
       const button = editButton.cloneNode(false)
       button.classList.add('ipi-context-generate')
       renderGenerationButton(button, generationState, generationProgress)
-      button.addEventListener('click', (event) => {
-        event.preventDefault()
-        event.stopPropagation()
-        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }))
-        generateFromMessage(contextMenuMessageId)
-      })
+      bindGenerationButton(button, () => contextMenuMessageId, true)
       insertionPoint.before(button)
     }
   }
@@ -661,11 +781,7 @@ export function setup(ctx) {
     const button = wrapper.querySelector('.ipi-generate-button')
     if (!button) return
 
-    button.addEventListener('click', (event) => {
-      event.preventDefault()
-      event.stopPropagation()
-      generateFromMessage(messageId)
-    })
+    bindGenerationButton(button, () => messageId)
     actionWrappers.set(messageId, wrapper)
     actionButtons.add(button)
     renderGenerationButton(button, generationState, generationProgress)
@@ -697,9 +813,16 @@ export function setup(ctx) {
   const observer = new MutationObserver(scheduleScan)
   observer.observe(document.body, { childList: true, subtree: true })
   document.addEventListener('contextmenu', captureContextMenuMessage, true)
+  void refreshAutoGenerationState()
   scheduleScan()
 
   const unsubscribeChatSwitched = ctx.events?.on?.('CHAT_SWITCHED', scheduleScan)
+  const unsubscribeSettingsUpdated = ctx.events?.on?.('SETTINGS_UPDATED', (payload) => {
+    const keys = typeof payload?.key === 'string'
+      ? [payload.key]
+      : Array.isArray(payload?.keys) ? payload.keys : []
+    if (keys.includes('imageGeneration')) void refreshAutoGenerationState()
+  })
   const unsubscribeImageProgress = ctx.events?.on?.('IMAGE_GEN_PROGRESS', (payload) => {
     if (!generating || (payload?.chatId && payload.chatId !== currentChatId())) return
     const step = Number(payload?.step)
@@ -721,6 +844,7 @@ export function setup(ctx) {
     if (previewModal) previewModal.dismiss()
     removeGeneratedBackground()
     if (typeof unsubscribeChatSwitched === 'function') unsubscribeChatSwitched()
+    if (typeof unsubscribeSettingsUpdated === 'function') unsubscribeSettingsUpdated()
     if (typeof unsubscribeImageProgress === 'function') unsubscribeImageProgress()
     actionWrappers.clear()
     actionButtons.clear()
