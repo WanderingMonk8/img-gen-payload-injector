@@ -60,17 +60,17 @@ export function setup(ctx) {
     .ipi-generate-button.ipi-action-error,
     .ipi-context-generate.ipi-action-error { color: var(--lumiverse-danger, #d44) !important; }
     .ipi-generate-button.ipi-auto-enabled,
-    .ipi-context-generate.ipi-auto-enabled {
-      background: color-mix(in srgb, var(--lumiverse-accent, #7c5cff) 20%, transparent) !important;
-      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lumiverse-accent, #7c5cff) 72%, transparent);
+    .ipi-context-generate.ipi-auto-enabled:not([data-lummate-context-play]) {
+      color: #79d9d0 !important;
+      background-color: rgba(52, 171, 160, .2) !important;
+      box-shadow: inset 0 0 0 1px rgba(121, 217, 208, .8), 0 0 8px rgba(52, 171, 160, .35) !important;
+      border-radius: 6px;
     }
-    .ipi-generate-button.ipi-auto-enabled { color: var(--lumiverse-accent, #7c5cff) !important; }
     .ipi-context-generate svg { flex: 0 0 auto; }
     .ipi-context-anchor { margin-top: var(--ipi-context-height, 38px) !important; }
     .ipi-context-generate:not([data-lummate-context-play]) {
       position: absolute; z-index: 1; box-sizing: border-box;
       display: flex; align-items: center; text-align: left; cursor: pointer;
-      -webkit-touch-callout: none; user-select: none;
     }
     .ipi-spin {
       animation: ipi-spin 800ms linear infinite;
@@ -684,18 +684,7 @@ export function setup(ctx) {
     let pressStartX = 0
     let pressStartY = 0
     let suppressClick = false
-    let touchPress = false
-    let touchMoved = false
-    let suppressTouchClickUntil = 0
-    let hapticRetryPending = false
-
-    const vibrateForLongPress = () => {
-      try {
-        return typeof navigator.vibrate === 'function' && navigator.vibrate(50)
-      } catch {
-        return false
-      }
-    }
+    let clearMessageIdTimer = null
 
     const cancelLongPress = () => {
       if (pressTimer) clearTimeout(pressTimer)
@@ -704,12 +693,7 @@ export function setup(ctx) {
 
     // Lumiverse also starts a message context-menu timer on touchstart.
     // Keep touches on this action from reaching the surrounding message.
-    button.addEventListener('touchstart', (event) => {
-      event.stopPropagation()
-      // Prevent the browser's synthetic contextmenu, which other extensions
-      // observe before this button can stop it. Touch taps are handled below.
-      if (closeMenu) event.preventDefault()
-    }, { passive: false })
+    button.addEventListener('touchstart', (event) => event.stopPropagation(), { passive: true })
     // The menu overlay is outside Lumiverse's menu, so its outside-click
     // handlers must not see presses on the extension's action.
     if (closeMenu) {
@@ -722,10 +706,12 @@ export function setup(ctx) {
       if (closeMenu || event.pointerType !== 'mouse') event.stopPropagation()
       cancelLongPress()
       suppressClick = false
-      suppressTouchClickUntil = 0
-      hapticRetryPending = false
-      touchPress = closeMenu && event.pointerType === 'touch'
-      touchMoved = false
+      // The voice extension observes native contextmenu events at window
+      // capture. Preserve its message identity when Android emits one here.
+      if (closeMenu && event.pointerType === 'touch' && contextMenuMessageId) {
+        if (clearMessageIdTimer) clearTimeout(clearMessageIdTimer)
+        button.dataset.messageId = contextMenuMessageId
+      }
       pressStartX = event.clientX
       pressStartY = event.clientY
       pressTimer = setTimeout(() => {
@@ -737,38 +723,28 @@ export function setup(ctx) {
           expires: Date.now() + 10000,
           clear: () => { suppressClick = false },
         }
-        if (event.pointerType === 'touch') {
-          hapticRetryPending = !vibrateForLongPress()
-        }
         void toggleAutoGeneration()
       }, LONG_PRESS_MS)
     })
     button.addEventListener('pointermove', (event) => {
       if (!pressTimer) return
       if (Math.hypot(event.clientX - pressStartX, event.clientY - pressStartY) > 12) {
-        touchMoved = true
         cancelLongPress()
       }
     })
     button.addEventListener('pointerup', (event) => {
       if (closeMenu) event.stopPropagation()
       cancelLongPress()
-      if (event.pointerType === 'touch' && hapticRetryPending) {
-        hapticRetryPending = !vibrateForLongPress()
-      }
-      if (touchPress) {
-        touchPress = false
-        if (!touchMoved && !suppressClick) {
-          suppressTouchClickUntil = Date.now() + 1000
-          button.click()
-        }
+      if (closeMenu && event.pointerType === 'touch') {
+        clearMessageIdTimer = setTimeout(() => { delete button.dataset.messageId; clearMessageIdTimer = null }, 1000)
       }
     })
     button.addEventListener('pointercancel', (event) => {
       if (closeMenu) event.stopPropagation()
-      touchPress = false
-      hapticRetryPending = false
       cancelLongPress()
+      if (closeMenu && event.pointerType === 'touch') {
+        clearMessageIdTimer = setTimeout(() => { delete button.dataset.messageId; clearMessageIdTimer = null }, 1000)
+      }
     })
     button.addEventListener('pointerleave', (event) => {
       if (event.pointerType === 'mouse') cancelLongPress()
@@ -782,7 +758,6 @@ export function setup(ctx) {
     button.addEventListener('click', (event) => {
       event.preventDefault()
       event.stopPropagation()
-      if (event.detail !== 0 && Date.now() < suppressTouchClickUntil) return
       if (generating) return
       if (suppressClick) {
         suppressClick = false
