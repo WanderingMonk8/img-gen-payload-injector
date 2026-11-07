@@ -695,9 +695,16 @@ export function setup(ctx) {
     // Lumiverse also starts a message context-menu timer on touchstart.
     // Keep touches on this action from reaching the surrounding message.
     button.addEventListener('touchstart', (event) => event.stopPropagation(), { passive: true })
+    // The menu action is positioned inside the TTS item. Do not let the
+    // TTS item's own mouse, pointer, or touch handlers see this gesture.
+    if (closeMenu) {
+      for (const type of ['mousedown', 'mouseup', 'touchend', 'touchcancel']) {
+        button.addEventListener(type, (event) => event.stopPropagation())
+      }
+    }
     button.addEventListener('pointerdown', (event) => {
       if ((event.pointerType === 'mouse' && event.button !== 0) || button.disabled) return
-      if (event.pointerType !== 'mouse') event.stopPropagation()
+      if (closeMenu || event.pointerType !== 'mouse') event.stopPropagation()
       cancelLongPress()
       suppressClick = false
       pressStartX = event.clientX
@@ -720,8 +727,14 @@ export function setup(ctx) {
         cancelLongPress()
       }
     })
-    button.addEventListener('pointerup', cancelLongPress)
-    button.addEventListener('pointercancel', cancelLongPress)
+    button.addEventListener('pointerup', (event) => {
+      if (closeMenu) event.stopPropagation()
+      cancelLongPress()
+    })
+    button.addEventListener('pointercancel', (event) => {
+      if (closeMenu) event.stopPropagation()
+      cancelLongPress()
+    })
     button.addEventListener('pointerleave', (event) => {
       if (event.pointerType === 'mouse') cancelLongPress()
     })
