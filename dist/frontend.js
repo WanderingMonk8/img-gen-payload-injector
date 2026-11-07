@@ -244,6 +244,7 @@ export function setup(ctx) {
   const toast = toastWrapper.querySelector('.ipi-toast')
   const actionWrappers = new Map()
   const actionButtons = new Set()
+  const contextActions = new WeakMap()
   let toastTimer = null
   let scanFrame = null
   let generating = false
@@ -742,13 +743,13 @@ export function setup(ctx) {
       const editButton = pencilIcon.closest('button')
       const menu = editButton?.parentElement
       if (!editButton || !menu || getComputedStyle(menu).position !== 'fixed') continue
+      const registeredAction = contextActions.get(menu)
       const existingActions = Array.from(menu.children).filter(element => element.classList.contains('ipi-context-generate'))
-      if (existingActions.length) {
-        for (const duplicate of existingActions.slice(1)) duplicate.remove()
-        continue
+      for (const action of existingActions) {
+        if (action !== registeredAction) action.remove()
       }
 
-      const buttons = Array.from(menu.children).filter(element => element.tagName === 'BUTTON')
+      const buttons = Array.from(menu.children).filter(element => element.tagName === 'BUTTON' && element !== registeredAction)
       const editIndex = buttons.indexOf(editButton)
       const copyButton = buttons[editIndex - 1]
       if (editIndex < 1 || !copyButton?.querySelector('svg.lucide-copy')) continue
@@ -759,11 +760,21 @@ export function setup(ctx) {
       const insertionPoint = ttsButton || buttons[editIndex + 1]
       if (!insertionPoint) continue
 
-      const button = editButton.cloneNode(false)
-      button.classList.add('ipi-context-generate')
+      let button = registeredAction
+      if (!button || button.parentElement !== menu) {
+        button = editButton.cloneNode(false)
+        button.classList.add('ipi-context-generate')
+        bindGenerationButton(button, () => contextMenuMessageId, true)
+        contextActions.set(menu, button)
+      }
+      // The host may reconcile or move its own menu children after opening.
+      // Keep the one registered button in the intended position and restore
+      // its contents if a host render replaced them.
+      if (!button.querySelector(':scope > svg') || !button.querySelector(':scope > span')) {
+        delete button.dataset.ipiIconState
+      }
       renderGenerationButton(button, generationState, generationProgress)
-      bindGenerationButton(button, () => contextMenuMessageId, true)
-      insertionPoint.before(button)
+      if (button.nextElementSibling !== insertionPoint) insertionPoint.before(button)
     }
   }
 
