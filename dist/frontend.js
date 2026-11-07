@@ -66,6 +66,12 @@ export function setup(ctx) {
     }
     .ipi-generate-button.ipi-auto-enabled { color: var(--lumiverse-accent, #7c5cff) !important; }
     .ipi-context-generate svg { flex: 0 0 auto; }
+    .ipi-context-anchor { position: relative; margin-top: var(--ipi-context-height, 38px) !important; overflow: visible !important; }
+    .ipi-context-anchor > .ipi-context-generate {
+      position: absolute; left: 0; right: 0; top: calc(-1 * var(--ipi-context-height, 38px));
+      height: var(--ipi-context-height, 38px); box-sizing: border-box;
+      display: flex; align-items: center; text-align: left; cursor: pointer;
+    }
     .ipi-spin {
       animation: ipi-spin 800ms linear infinite;
       transform-box: fill-box;
@@ -245,6 +251,7 @@ export function setup(ctx) {
   const actionWrappers = new Map()
   const actionButtons = new Set()
   const contextActions = new WeakMap()
+  const contextAnchors = new Set()
   let toastTimer = null
   let scanFrame = null
   let generating = false
@@ -288,6 +295,7 @@ export function setup(ctx) {
     let label = 'Generate image'
 
     button.disabled = state === 'busy'
+    if (isContextAction) button.setAttribute('aria-disabled', String(state === 'busy'))
     button.classList.remove('ipi-action-success', 'ipi-action-error')
     button.removeAttribute('aria-busy')
 
@@ -726,6 +734,7 @@ export function setup(ctx) {
     button.addEventListener('click', (event) => {
       event.preventDefault()
       event.stopPropagation()
+      if (generating) return
       if (suppressClick) {
         suppressClick = false
         consumedHold = null
@@ -736,6 +745,14 @@ export function setup(ctx) {
       }
       void generateFromMessage(getMessageId())
     })
+    if (closeMenu) {
+      button.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return
+        event.preventDefault()
+        event.stopPropagation()
+        button.click()
+      })
+    }
   }
 
   function installContextMenuAction() {
@@ -744,12 +761,7 @@ export function setup(ctx) {
       const menu = editButton?.parentElement
       if (!editButton || !menu || getComputedStyle(menu).position !== 'fixed') continue
       const registeredAction = contextActions.get(menu)
-      const existingActions = Array.from(menu.children).filter(element => element.classList.contains('ipi-context-generate'))
-      for (const action of existingActions) {
-        if (action !== registeredAction) action.remove()
-      }
-
-      const buttons = Array.from(menu.children).filter(element => element.tagName === 'BUTTON' && element !== registeredAction)
+      const buttons = Array.from(menu.children).filter(element => element.tagName === 'BUTTON')
       const editIndex = buttons.indexOf(editButton)
       const copyButton = buttons[editIndex - 1]
       if (editIndex < 1 || !copyButton?.querySelector('svg.lucide-copy')) continue
@@ -761,20 +773,30 @@ export function setup(ctx) {
       if (!insertionPoint) continue
 
       let button = registeredAction
-      if (!button || button.parentElement !== menu) {
-        button = editButton.cloneNode(false)
+      if (!button || button.parentElement !== insertionPoint) {
+        if (button) {
+          button.parentElement?.classList.remove('ipi-context-anchor')
+          button.parentElement?.style.removeProperty('--ipi-context-height')
+          contextAnchors.delete(button.parentElement)
+          button.remove()
+        }
+        button = document.createElement('span')
+        button.className = editButton.className
         button.classList.add('ipi-context-generate')
+        button.setAttribute('role', 'button')
+        button.tabIndex = 0
         bindGenerationButton(button, () => contextMenuMessageId, true)
         contextActions.set(menu, button)
+        insertionPoint.classList.add('ipi-context-anchor')
+        contextAnchors.add(insertionPoint)
+        insertionPoint.append(button)
+        const height = insertionPoint.offsetHeight
+        if (height) insertionPoint.style.setProperty('--ipi-context-height', height + 'px')
       }
-      // The host may reconcile or move its own menu children after opening.
-      // Keep the one registered button in the intended position and restore
-      // its contents if a host render replaced them.
       if (!button.querySelector(':scope > svg') || !button.querySelector(':scope > span')) {
         delete button.dataset.ipiIconState
       }
       renderGenerationButton(button, generationState, generationProgress)
-      if (button.nextElementSibling !== insertionPoint) insertionPoint.before(button)
     }
   }
 
@@ -903,6 +925,12 @@ export function setup(ctx) {
     if (typeof unsubscribeChatSwitched === 'function') unsubscribeChatSwitched()
     if (typeof unsubscribeSettingsUpdated === 'function') unsubscribeSettingsUpdated()
     if (typeof unsubscribeImageProgress === 'function') unsubscribeImageProgress()
+    for (const anchor of contextAnchors) {
+      anchor.querySelector(':scope > .ipi-context-generate')?.remove()
+      anchor.classList.remove('ipi-context-anchor')
+      anchor.style.removeProperty('--ipi-context-height')
+    }
+    contextAnchors.clear()
     actionWrappers.clear()
     actionButtons.clear()
     tab.destroy()
