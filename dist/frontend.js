@@ -66,10 +66,9 @@ export function setup(ctx) {
     }
     .ipi-generate-button.ipi-auto-enabled { color: var(--lumiverse-accent, #7c5cff) !important; }
     .ipi-context-generate svg { flex: 0 0 auto; }
-    .ipi-context-anchor { position: relative; margin-top: var(--ipi-context-height, 38px) !important; overflow: visible !important; }
-    .ipi-context-anchor > .ipi-context-generate {
-      position: absolute; left: 0; right: 0; top: calc(-1 * var(--ipi-context-height, 38px));
-      height: var(--ipi-context-height, 38px); box-sizing: border-box;
+    .ipi-context-anchor { margin-top: var(--ipi-context-height, 38px) !important; }
+    .ipi-context-generate {
+      position: fixed; z-index: 11001; box-sizing: border-box;
       display: flex; align-items: center; text-align: left; cursor: pointer;
     }
     .ipi-spin {
@@ -251,7 +250,7 @@ export function setup(ctx) {
   const actionWrappers = new Map()
   const actionButtons = new Set()
   const contextActions = new WeakMap()
-  const contextAnchors = new Set()
+  const contextEntries = new Set()
   let toastTimer = null
   let scanFrame = null
   let generating = false
@@ -695,8 +694,8 @@ export function setup(ctx) {
     // Lumiverse also starts a message context-menu timer on touchstart.
     // Keep touches on this action from reaching the surrounding message.
     button.addEventListener('touchstart', (event) => event.stopPropagation(), { passive: true })
-    // The menu action is positioned inside the TTS item. Do not let the
-    // TTS item's own mouse, pointer, or touch handlers see this gesture.
+    // The menu overlay is outside Lumiverse's menu, so its outside-click
+    // handlers must not see presses on the extension's action.
     if (closeMenu) {
       for (const type of ['mousedown', 'mouseup', 'touchend', 'touchcancel']) {
         button.addEventListener(type, (event) => event.stopPropagation())
@@ -758,22 +757,46 @@ export function setup(ctx) {
       }
       void generateFromMessage(getMessageId())
     })
-    if (closeMenu) {
-      button.addEventListener('keydown', (event) => {
-        if (event.key !== 'Enter' && event.key !== ' ') return
-        event.preventDefault()
-        event.stopPropagation()
-        button.click()
-      })
+  }
+
+  function removeContextEntry(entry) {
+    entry.button.remove()
+    entry.anchor.classList.remove('ipi-context-anchor')
+    entry.anchor.style.removeProperty('--ipi-context-height')
+    contextEntries.delete(entry)
+    if (contextActions.get(entry.menu) === entry) contextActions.delete(entry.menu)
+  }
+
+  function positionContextEntry(entry) {
+    const { menu, anchor, button } = entry
+    if (!menu.isConnected || !anchor.isConnected) {
+      removeContextEntry(entry)
+      return
     }
+    const rect = anchor.getBoundingClientRect()
+    const menuRect = menu.getBoundingClientRect()
+    const scale = anchor.offsetHeight ? rect.height / anchor.offsetHeight : 1
+    const safeScale = Number.isFinite(scale) && scale > 0 ? scale : 1
+    const rowHeight = anchor.offsetHeight || 38
+    const top = rect.top - rowHeight * safeScale
+    button.style.left = (rect.left / safeScale) + 'px'
+    button.style.top = (top / safeScale) + 'px'
+    button.style.width = (rect.width / safeScale) + 'px'
+    button.style.height = rowHeight + 'px'
+    button.style.visibility = top >= menuRect.top && rect.top <= menuRect.bottom ? '' : 'hidden'
+  }
+
+  function positionContextEntries() {
+    for (const entry of [...contextEntries]) positionContextEntry(entry)
   }
 
   function installContextMenuAction() {
+    positionContextEntries()
     for (const pencilIcon of document.querySelectorAll('svg.lucide-pencil')) {
       const editButton = pencilIcon.closest('button')
       const menu = editButton?.parentElement
       if (!editButton || !menu || getComputedStyle(menu).position !== 'fixed') continue
-      const registeredAction = contextActions.get(menu)
+      let entry = contextActions.get(menu)
       const buttons = Array.from(menu.children).filter(element => element.tagName === 'BUTTON')
       const editIndex = buttons.indexOf(editButton)
       const copyButton = buttons[editIndex - 1]
@@ -785,31 +808,29 @@ export function setup(ctx) {
       const insertionPoint = ttsButton || buttons[editIndex + 1]
       if (!insertionPoint) continue
 
-      let button = registeredAction
-      if (!button || button.parentElement !== insertionPoint) {
-        if (button) {
-          button.parentElement?.classList.remove('ipi-context-anchor')
-          button.parentElement?.style.removeProperty('--ipi-context-height')
-          contextAnchors.delete(button.parentElement)
-          button.remove()
-        }
-        button = document.createElement('span')
+      if (!entry || entry.anchor !== insertionPoint) {
+        if (entry) removeContextEntry(entry)
+        const button = document.createElement('button')
+        button.type = 'button'
         button.className = editButton.className
         button.classList.add('ipi-context-generate')
-        button.setAttribute('role', 'button')
-        button.tabIndex = 0
         bindGenerationButton(button, () => contextMenuMessageId, true)
-        contextActions.set(menu, button)
         insertionPoint.classList.add('ipi-context-anchor')
-        contextAnchors.add(insertionPoint)
-        insertionPoint.append(button)
         const height = insertionPoint.offsetHeight
         if (height) insertionPoint.style.setProperty('--ipi-context-height', height + 'px')
+        document.body.append(button)
+        entry = { menu, anchor: insertionPoint, button }
+        contextActions.set(menu, entry)
+        contextEntries.add(entry)
+        anchorObserver.observe(insertionPoint, { attributes: true, attributeFilter: ['class', 'style'] })
+        setTimeout(() => { if (!disposed) positionContextEntry(entry) }, 150)
       }
+      const button = entry.button
       if (!button.querySelector(':scope > svg') || !button.querySelector(':scope > span')) {
         delete button.dataset.ipiIconState
       }
       renderGenerationButton(button, generationState, generationProgress)
+      positionContextEntry(entry)
     }
   }
 
@@ -899,10 +920,24 @@ export function setup(ctx) {
   }
 
   const observer = new MutationObserver(scheduleScan)
+  const anchorObserver = new MutationObserver(() => {
+    for (const entry of contextEntries) {
+      if (!entry.anchor.isConnected) continue
+      if (!entry.anchor.classList.contains('ipi-context-anchor')) {
+        entry.anchor.classList.add('ipi-context-anchor')
+      }
+      if (!entry.anchor.style.getPropertyValue('--ipi-context-height')) {
+        entry.anchor.style.setProperty('--ipi-context-height', (entry.anchor.offsetHeight || 38) + 'px')
+      }
+    }
+    positionContextEntries()
+  })
   observer.observe(document.body, { childList: true, subtree: true })
   document.addEventListener('contextmenu', captureContextMenuMessage, true)
   document.addEventListener('click', suppressConsumedHoldClick, true)
   document.addEventListener('pointerdown', clearConsumedHoldOnNewPress, true)
+  window.addEventListener('scroll', positionContextEntries, true)
+  window.addEventListener('resize', positionContextEntries)
   void refreshAutoGenerationState()
   scheduleScan()
 
@@ -925,9 +960,12 @@ export function setup(ctx) {
   return () => {
     disposed = true
     observer.disconnect()
+    anchorObserver.disconnect()
     document.removeEventListener('contextmenu', captureContextMenuMessage, true)
     document.removeEventListener('click', suppressConsumedHoldClick, true)
     document.removeEventListener('pointerdown', clearConsumedHoldOnNewPress, true)
+    window.removeEventListener('scroll', positionContextEntries, true)
+    window.removeEventListener('resize', positionContextEntries)
     if (scanFrame !== null) cancelAnimationFrame(scanFrame)
     if (toastTimer) clearTimeout(toastTimer)
     if (generationTimeout) clearTimeout(generationTimeout)
@@ -938,12 +976,7 @@ export function setup(ctx) {
     if (typeof unsubscribeChatSwitched === 'function') unsubscribeChatSwitched()
     if (typeof unsubscribeSettingsUpdated === 'function') unsubscribeSettingsUpdated()
     if (typeof unsubscribeImageProgress === 'function') unsubscribeImageProgress()
-    for (const anchor of contextAnchors) {
-      anchor.querySelector(':scope > .ipi-context-generate')?.remove()
-      anchor.classList.remove('ipi-context-anchor')
-      anchor.style.removeProperty('--ipi-context-height')
-    }
-    contextAnchors.clear()
+    for (const entry of [...contextEntries]) removeContextEntry(entry)
     actionWrappers.clear()
     actionButtons.clear()
     tab.destroy()
