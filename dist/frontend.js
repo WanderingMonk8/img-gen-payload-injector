@@ -67,8 +67,8 @@ export function setup(ctx) {
     .ipi-generate-button.ipi-auto-enabled { color: var(--lumiverse-accent, #7c5cff) !important; }
     .ipi-context-generate svg { flex: 0 0 auto; }
     .ipi-context-anchor { margin-top: var(--ipi-context-height, 38px) !important; }
-    .ipi-context-generate {
-      position: fixed; z-index: 11001; box-sizing: border-box;
+    .ipi-context-generate:not([data-lummate-context-play]) {
+      position: absolute; z-index: 1; box-sizing: border-box;
       display: flex; align-items: center; text-align: left; cursor: pointer;
     }
     .ipi-spin {
@@ -341,7 +341,7 @@ export function setup(ctx) {
       }
       renderGenerationButton(button, state, progress)
     }
-    for (const button of document.querySelectorAll('.ipi-context-generate')) {
+    for (const button of document.querySelectorAll('.ipi-context-generate:not([data-lummate-context-play])')) {
       renderGenerationButton(button, state, progress)
     }
   }
@@ -773,17 +773,26 @@ export function setup(ctx) {
       removeContextEntry(entry)
       return
     }
-    const rect = anchor.getBoundingClientRect()
-    const menuRect = menu.getBoundingClientRect()
-    const scale = anchor.offsetHeight ? rect.height / anchor.offsetHeight : 1
-    const safeScale = Number.isFinite(scale) && scale > 0 ? scale : 1
     const rowHeight = anchor.offsetHeight || 38
-    const top = rect.top - rowHeight * safeScale
-    button.style.left = (rect.left / safeScale) + 'px'
-    button.style.top = (top / safeScale) + 'px'
-    button.style.width = (rect.width / safeScale) + 'px'
+    const play = menu.querySelector('[data-lummate-context-play="true"]')
+    const reservedHeight = rowHeight * (play ? 2 : 1)
+    const heightValue = reservedHeight + 'px'
+    if (anchor.style.getPropertyValue('--ipi-context-height') !== heightValue) {
+      anchor.style.setProperty('--ipi-context-height', heightValue)
+    }
+    button.style.left = anchor.offsetLeft + 'px'
+    button.style.top = (anchor.offsetTop - rowHeight) + 'px'
+    button.style.width = anchor.offsetWidth + 'px'
     button.style.height = rowHeight + 'px'
-    button.style.visibility = top >= menuRect.top && rect.top <= menuRect.bottom ? '' : 'hidden'
+    if (play) {
+      play.classList.remove('ipi-context-generate', 'ipi-auto-enabled', 'ipi-action-success', 'ipi-action-error')
+      play.style.position = 'absolute'
+      play.style.left = anchor.offsetLeft + 'px'
+      play.style.top = (anchor.offsetTop - 2 * rowHeight) + 'px'
+      play.style.width = anchor.offsetWidth + 'px'
+      play.style.height = rowHeight + 'px'
+      play.style.zIndex = '1'
+    }
   }
 
   function positionContextEntries() {
@@ -818,7 +827,7 @@ export function setup(ctx) {
         insertionPoint.classList.add('ipi-context-anchor')
         const height = insertionPoint.offsetHeight
         if (height) insertionPoint.style.setProperty('--ipi-context-height', height + 'px')
-        document.body.append(button)
+        menu.append(button)
         entry = { menu, anchor: insertionPoint, button }
         contextActions.set(menu, entry)
         contextEntries.add(entry)
@@ -826,6 +835,7 @@ export function setup(ctx) {
         setTimeout(() => { if (!disposed) positionContextEntry(entry) }, 150)
       }
       const button = entry.button
+      if (button.parentElement !== menu) menu.append(button)
       if (!button.querySelector(':scope > svg') || !button.querySelector(':scope > span')) {
         delete button.dataset.ipiIconState
       }
