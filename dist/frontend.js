@@ -259,6 +259,7 @@ export function setup(ctx) {
   let contextMenuMessageId = null
   let autoGenerationEnabled = false
   let autoToggleBusy = false
+  let consumedHold = null
 
   function showToast(text, error = false) {
     if (!toast) return
@@ -695,6 +696,12 @@ export function setup(ctx) {
       pressTimer = setTimeout(() => {
         pressTimer = null
         suppressClick = true
+        consumedHold = {
+          button,
+          menu: closeMenu ? button.parentElement : null,
+          expires: Date.now() + 10000,
+          clear: () => { suppressClick = false },
+        }
         void toggleAutoGeneration()
       }, LONG_PRESS_MS)
     })
@@ -718,12 +725,13 @@ export function setup(ctx) {
     button.addEventListener('click', (event) => {
       event.preventDefault()
       event.stopPropagation()
-      if (closeMenu) {
-        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }))
-      }
       if (suppressClick) {
         suppressClick = false
+        consumedHold = null
         return
+      }
+      if (closeMenu) {
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }))
       }
       void generateFromMessage(getMessageId())
     })
@@ -734,7 +742,11 @@ export function setup(ctx) {
       const editButton = pencilIcon.closest('button')
       const menu = editButton?.parentElement
       if (!editButton || !menu || getComputedStyle(menu).position !== 'fixed') continue
-      if (menu.querySelector(':scope > .ipi-context-generate')) continue
+      const existingActions = Array.from(menu.children).filter(element => element.classList.contains('ipi-context-generate'))
+      if (existingActions.length) {
+        for (const duplicate of existingActions.slice(1)) duplicate.remove()
+        continue
+      }
 
       const buttons = Array.from(menu.children).filter(element => element.tagName === 'BUTTON')
       const editIndex = buttons.indexOf(editButton)
@@ -817,9 +829,34 @@ export function setup(ctx) {
       : event.target?.closest?.('[data-message-id]')?.getAttribute('data-message-id') || null
   }
 
+  function suppressConsumedHoldClick(event) {
+    if (!consumedHold) return
+    if (Date.now() > consumedHold.expires) {
+      consumedHold.clear()
+      consumedHold = null
+      return
+    }
+    const target = event.target
+    if (target instanceof Element && (consumedHold.button.contains(target)
+      || (consumedHold.menu && consumedHold.menu.contains(target)
+        && target.closest('.ipi-context-generate')))) {
+      event.preventDefault()
+      event.stopPropagation()
+      consumedHold.clear()
+      consumedHold = null
+    }
+  }
+
+  function clearConsumedHoldOnNewPress() {
+    consumedHold?.clear()
+    consumedHold = null
+  }
+
   const observer = new MutationObserver(scheduleScan)
   observer.observe(document.body, { childList: true, subtree: true })
   document.addEventListener('contextmenu', captureContextMenuMessage, true)
+  document.addEventListener('click', suppressConsumedHoldClick, true)
+  document.addEventListener('pointerdown', clearConsumedHoldOnNewPress, true)
   void refreshAutoGenerationState()
   scheduleScan()
 
@@ -843,6 +880,8 @@ export function setup(ctx) {
     disposed = true
     observer.disconnect()
     document.removeEventListener('contextmenu', captureContextMenuMessage, true)
+    document.removeEventListener('click', suppressConsumedHoldClick, true)
+    document.removeEventListener('pointerdown', clearConsumedHoldOnNewPress, true)
     if (scanFrame !== null) cancelAnimationFrame(scanFrame)
     if (toastTimer) clearTimeout(toastTimer)
     if (generationTimeout) clearTimeout(generationTimeout)
