@@ -867,6 +867,20 @@ export function setup(ctx) {
     const target = mount || speakerButton
     if (!target) return
 
+    function matchToolbarButtonStyle(button) {
+      // The voice extension highlights Lumiverse's native TTS button. Copy
+      // its host styling so our button has the same size, padding and shape.
+      const classes = speakerButton
+        ? Array.from(speakerButton.classList).filter(name => !/active|playing|busy|disabled/i.test(name))
+        : []
+      if (button.dataset.ipiHostClasses === classes.join(' ')) return
+      for (const name of button.dataset.ipiHostClasses?.split(' ').filter(Boolean) || []) {
+        button.classList.remove(name)
+      }
+      if (classes.length) button.classList.add(...classes)
+      button.dataset.ipiHostClasses = classes.join(' ')
+    }
+
     if (existing) {
       if (!toolbar.contains(existing)) {
         if (mount) mount.insertAdjacentElement('beforebegin', existing)
@@ -874,6 +888,7 @@ export function setup(ctx) {
       }
       const existingButton = existing.querySelector('.ipi-generate-button')
       if (existingButton) {
+        matchToolbarButtonStyle(existingButton)
         actionButtons.add(existingButton)
         renderGenerationButton(existingButton, generationState, generationProgress)
       }
@@ -889,6 +904,7 @@ export function setup(ctx) {
     const button = wrapper.querySelector('.ipi-generate-button')
     if (!button) return
 
+    matchToolbarButtonStyle(button)
     bindGenerationButton(button, () => messageId)
     actionWrappers.set(messageId, wrapper)
     actionButtons.add(button)
