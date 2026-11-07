@@ -727,6 +727,9 @@ export function setup(ctx) {
           expires: Date.now() + 10000,
           clear: () => { suppressClick = false },
         }
+        if (event.pointerType === 'touch') {
+          try { navigator.vibrate?.(20) } catch { /* Haptics are optional. */ }
+        }
         void toggleAutoGeneration()
       }, LONG_PRESS_MS)
     })
