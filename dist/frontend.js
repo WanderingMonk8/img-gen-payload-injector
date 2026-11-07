@@ -682,8 +682,12 @@ export function setup(ctx) {
       pressTimer = null
     }
 
+    // Lumiverse also starts a message context-menu timer on touchstart.
+    // Keep touches on this action from reaching the surrounding message.
+    button.addEventListener('touchstart', (event) => event.stopPropagation(), { passive: true })
     button.addEventListener('pointerdown', (event) => {
       if ((event.pointerType === 'mouse' && event.button !== 0) || button.disabled) return
+      if (event.pointerType !== 'mouse') event.stopPropagation()
       cancelLongPress()
       suppressClick = false
       pressStartX = event.clientX
@@ -706,7 +710,10 @@ export function setup(ctx) {
       if (event.pointerType === 'mouse') cancelLongPress()
     })
     button.addEventListener('contextmenu', (event) => {
-      if (pressTimer || suppressClick) event.preventDefault()
+      if (pressTimer || suppressClick) {
+        event.preventDefault()
+        event.stopPropagation()
+      }
     })
     button.addEventListener('click', (event) => {
       event.preventDefault()
