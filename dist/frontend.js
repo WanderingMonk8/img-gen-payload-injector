@@ -70,6 +70,7 @@ export function setup(ctx) {
     .ipi-context-generate:not([data-lummate-context-play]) {
       position: absolute; z-index: 1; box-sizing: border-box;
       display: flex; align-items: center; text-align: left; cursor: pointer;
+      -webkit-touch-callout: none; user-select: none;
     }
     .ipi-spin {
       animation: ipi-spin 800ms linear infinite;
@@ -683,6 +684,9 @@ export function setup(ctx) {
     let pressStartX = 0
     let pressStartY = 0
     let suppressClick = false
+    let touchPress = false
+    let touchMoved = false
+    let suppressTouchClickUntil = 0
 
     const cancelLongPress = () => {
       if (pressTimer) clearTimeout(pressTimer)
@@ -691,7 +695,12 @@ export function setup(ctx) {
 
     // Lumiverse also starts a message context-menu timer on touchstart.
     // Keep touches on this action from reaching the surrounding message.
-    button.addEventListener('touchstart', (event) => event.stopPropagation(), { passive: true })
+    button.addEventListener('touchstart', (event) => {
+      event.stopPropagation()
+      // Prevent the browser's synthetic contextmenu, which other extensions
+      // observe before this button can stop it. Touch taps are handled below.
+      if (closeMenu) event.preventDefault()
+    }, { passive: false })
     // The menu overlay is outside Lumiverse's menu, so its outside-click
     // handlers must not see presses on the extension's action.
     if (closeMenu) {
@@ -704,6 +713,9 @@ export function setup(ctx) {
       if (closeMenu || event.pointerType !== 'mouse') event.stopPropagation()
       cancelLongPress()
       suppressClick = false
+      suppressTouchClickUntil = 0
+      touchPress = closeMenu && event.pointerType === 'touch'
+      touchMoved = false
       pressStartX = event.clientX
       pressStartY = event.clientY
       pressTimer = setTimeout(() => {
@@ -721,15 +733,24 @@ export function setup(ctx) {
     button.addEventListener('pointermove', (event) => {
       if (!pressTimer) return
       if (Math.hypot(event.clientX - pressStartX, event.clientY - pressStartY) > 12) {
+        touchMoved = true
         cancelLongPress()
       }
     })
     button.addEventListener('pointerup', (event) => {
       if (closeMenu) event.stopPropagation()
       cancelLongPress()
+      if (touchPress) {
+        touchPress = false
+        if (!touchMoved && !suppressClick) {
+          suppressTouchClickUntil = Date.now() + 1000
+          button.click()
+        }
+      }
     })
     button.addEventListener('pointercancel', (event) => {
       if (closeMenu) event.stopPropagation()
+      touchPress = false
       cancelLongPress()
     })
     button.addEventListener('pointerleave', (event) => {
@@ -744,6 +765,7 @@ export function setup(ctx) {
     button.addEventListener('click', (event) => {
       event.preventDefault()
       event.stopPropagation()
+      if (event.detail !== 0 && Date.now() < suppressTouchClickUntil) return
       if (generating) return
       if (suppressClick) {
         suppressClick = false
