@@ -30,7 +30,7 @@ The editor also accepts a captured `{ "body": { ... } }` object or a full NanoGP
 
 Hover a chat message and click the image icon after the speaker icon, or right-click a message and choose **Generate image** immediately before the TTS action. Scene and chat-aware modes use the context ending at the selected message, including when it is not the latest message. Direct custom mode continues to send its literal custom prompt. Both shortcuts use the active image connection, prompt mode, prompt preset, custom prompt fields, timeout settings, and connection defaults where the JSON override is stored.
 
-Press and hold either image generation action for about 650 ms to toggle **Auto-Generate On Reply**. While enabled, the action has an accent background and its label reports `Auto`. Lumiverse generates an image after each successful message generation completes. Press and hold again to disable it. This controls the same setting shown in the Image Gen pane, so changes from either place stay synchronized.
+Press and hold either image generation action for about 650 ms to toggle **Auto-Generate On Reply**. While enabled, the action has an accent background. Lumiverse generates an image after each successful message generation completes. Press and hold again to disable it. This controls the same setting shown in the Image Gen pane, so changes from either place stay synchronized.
 
 These shortcuts follow the **Output** selection in Lumiverse's Image Gen pane:
 

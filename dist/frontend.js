@@ -313,9 +313,7 @@ export function setup(ctx) {
 
     button.classList.toggle('ipi-auto-enabled', autoGenerationEnabled)
     button.setAttribute('aria-pressed', String(autoGenerationEnabled))
-    const visibleLabel = autoGenerationEnabled && state === 'idle'
-      ? 'Generate image (Auto)'
-      : label
+    const visibleLabel = label
     const holdHint = autoGenerationEnabled
       ? 'Auto generation is on. Hold to disable.'
       : 'Hold to enable auto generation.'
