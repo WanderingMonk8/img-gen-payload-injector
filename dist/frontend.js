@@ -687,6 +687,15 @@ export function setup(ctx) {
     let touchPress = false
     let touchMoved = false
     let suppressTouchClickUntil = 0
+    let hapticRetryPending = false
+
+    const vibrateForLongPress = () => {
+      try {
+        return typeof navigator.vibrate === 'function' && navigator.vibrate(50)
+      } catch {
+        return false
+      }
+    }
 
     const cancelLongPress = () => {
       if (pressTimer) clearTimeout(pressTimer)
@@ -714,6 +723,7 @@ export function setup(ctx) {
       cancelLongPress()
       suppressClick = false
       suppressTouchClickUntil = 0
+      hapticRetryPending = false
       touchPress = closeMenu && event.pointerType === 'touch'
       touchMoved = false
       pressStartX = event.clientX
@@ -728,7 +738,7 @@ export function setup(ctx) {
           clear: () => { suppressClick = false },
         }
         if (event.pointerType === 'touch') {
-          try { navigator.vibrate?.(20) } catch { /* Haptics are optional. */ }
+          hapticRetryPending = !vibrateForLongPress()
         }
         void toggleAutoGeneration()
       }, LONG_PRESS_MS)
@@ -743,6 +753,9 @@ export function setup(ctx) {
     button.addEventListener('pointerup', (event) => {
       if (closeMenu) event.stopPropagation()
       cancelLongPress()
+      if (event.pointerType === 'touch' && hapticRetryPending) {
+        hapticRetryPending = !vibrateForLongPress()
+      }
       if (touchPress) {
         touchPress = false
         if (!touchMoved && !suppressClick) {
@@ -754,6 +767,7 @@ export function setup(ctx) {
     button.addEventListener('pointercancel', (event) => {
       if (closeMenu) event.stopPropagation()
       touchPress = false
+      hapticRetryPending = false
       cancelLongPress()
     })
     button.addEventListener('pointerleave', (event) => {
