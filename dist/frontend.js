@@ -64,7 +64,7 @@ export function setup(ctx) {
       color: #79d9d0 !important;
       background-color: rgba(52, 171, 160, .2) !important;
       box-shadow: inset 0 0 0 1px rgba(121, 217, 208, .8), 0 0 8px rgba(52, 171, 160, .35) !important;
-      border-radius: 6px;
+      border-radius: 6px !important;
     }
     .ipi-context-generate svg { flex: 0 0 auto; }
     .ipi-context-anchor { margin-top: var(--ipi-context-height, 38px) !important; }
