@@ -492,9 +492,6 @@ export function setup(ctx) {
       updatePendingAutoGenerationSetting(enabled)
       autoGenerationEnabled = enabled
       setGenerationState(generationState, generationProgress)
-      showToast(enabled
-        ? 'Auto image generation enabled.'
-        : 'Auto image generation disabled.')
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
       showToast('Could not update auto image generation: ' + detail, true)
@@ -615,7 +612,6 @@ export function setup(ctx) {
     if (stateResetTimer) clearTimeout(stateResetTimer)
     stateResetTimer = null
     setGenerationState('busy')
-    showToast('Image generation started.')
 
     const controller = new AbortController()
     generationController = controller
@@ -659,17 +655,10 @@ export function setup(ctx) {
 
       if (outputTarget === 'background') {
         applyGeneratedBackground(result, settings)
-        finishGeneration('success', 'Image set as the chat background.')
       } else if (outputTarget === 'preview') {
         showGeneratedImage(result)
-        finishGeneration('success', 'Image generated for preview.')
-      } else if (outputTarget === 'chat_attachment') {
-        finishGeneration('success', 'Image inserted into the chat.')
-      } else {
-        finishGeneration('success', messageId
-          ? 'Image attached to the selected message.'
-          : 'Image attached to the last message.')
       }
+      finishGeneration('success')
     } catch (error) {
       const timedOut = error?.name === 'AbortError'
       const detail = timedOut
