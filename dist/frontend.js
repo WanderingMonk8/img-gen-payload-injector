@@ -268,6 +268,7 @@ export function setup(ctx) {
   let autoGenerationEnabled = false
   let autoToggleBusy = false
   let consumedHold = null
+  const observedImageRequests = new Set()
 
   function showToast(text, error = false) {
     if (!toast) return
@@ -283,6 +284,11 @@ export function setup(ctx) {
     if (!match) return null
     try { return decodeURIComponent(match[1]) }
     catch { return match[1] }
+  }
+
+  function hasObservedImageRequest() {
+    const chatId = currentChatId()
+    return !!chatId && [...observedImageRequests].some(request => request.chatId === chatId)
   }
 
   function renderGenerationButton(button, state, progress = '') {
@@ -331,6 +337,7 @@ export function setup(ctx) {
   }
 
   function setGenerationState(state, progress = '') {
+    if (generating || hasObservedImageRequest()) state = 'busy'
     generationState = state
     generationProgress = progress
     for (const button of [...actionButtons]) {
@@ -356,7 +363,7 @@ export function setup(ctx) {
     if (stateResetTimer) clearTimeout(stateResetTimer)
     stateResetTimer = setTimeout(() => {
       stateResetTimer = null
-      if (!generating) setGenerationState('idle')
+      if (!generating && !hasObservedImageRequest()) setGenerationState('idle')
     }, 1800)
     if (notice) showToast(notice, error)
   }
@@ -601,7 +608,7 @@ export function setup(ctx) {
 
   // The extension worker API forces preview output; this is the same route used by ImageGenPanel.
   async function generateFromMessage(messageId) {
-    if (generating) return
+    if (generating || hasObservedImageRequest()) return
     const chatId = currentChatId()
     if (!chatId) {
       showToast('Open a chat before generating an image.', true)
@@ -747,7 +754,7 @@ export function setup(ctx) {
     button.addEventListener('click', (event) => {
       event.preventDefault()
       event.stopPropagation()
-      if (generating) return
+      if (generating || hasObservedImageRequest()) return
       if (suppressClick) {
         suppressClick = false
         consumedHold = null
@@ -946,6 +953,51 @@ export function setup(ctx) {
     consumedHold = null
   }
 
+  // Native auto-generation calls this same route but exposes no start event.
+  // Observe its fetch without consuming or changing the response; a settled
+  // request also covers failures and scene-analysis skips with no WS event.
+  const previousFetch = window.fetch
+  function observeImageFetch(input, options) {
+    let request = null
+    try {
+      const rawUrl = typeof input === 'string' || input instanceof URL ? String(input) : input.url
+      const url = new URL(rawUrl, window.location.href)
+      const method = String(options?.method || input?.method || 'GET').toUpperCase()
+      if (url.origin === window.location.origin && url.pathname.endsWith('/image-gen/generate') && method === 'POST') {
+        let chatId = null
+        if (typeof options?.body === 'string') {
+          try { chatId = JSON.parse(options.body)?.chatId || null } catch {}
+        }
+        request = { chatId: chatId || currentChatId() }
+        observedImageRequests.add(request)
+        if (request.chatId === currentChatId()) {
+          if (stateResetTimer) clearTimeout(stateResetTimer)
+          stateResetTimer = null
+          setGenerationState('busy')
+        }
+      }
+    } catch {}
+
+    if (!request) return previousFetch.call(this, input, options)
+
+    const finish = () => {
+      observedImageRequests.delete(request)
+      if (!disposed && request.chatId === currentChatId() && !generating && !hasObservedImageRequest()) {
+        setGenerationState('idle')
+      }
+    }
+    try {
+      return previousFetch.call(this, input, options).then(
+        response => { finish(); return response },
+        error => { finish(); throw error },
+      )
+    } catch (error) {
+      finish()
+      throw error
+    }
+  }
+  window.fetch = observeImageFetch
+
   const observer = new MutationObserver(scheduleScan)
   const anchorObserver = new MutationObserver(() => {
     for (const entry of contextEntries) {
@@ -968,7 +1020,10 @@ export function setup(ctx) {
   void refreshAutoGenerationState()
   scheduleScan()
 
-  const unsubscribeChatSwitched = ctx.events?.on?.('CHAT_SWITCHED', scheduleScan)
+  const unsubscribeChatSwitched = ctx.events?.on?.('CHAT_SWITCHED', () => {
+    setGenerationState('idle')
+    scheduleScan()
+  })
   const unsubscribeSettingsUpdated = ctx.events?.on?.('SETTINGS_UPDATED', (payload) => {
     const keys = typeof payload?.key === 'string'
       ? [payload.key]
@@ -976,7 +1031,7 @@ export function setup(ctx) {
     if (keys.includes('imageGeneration')) void refreshAutoGenerationState()
   })
   const unsubscribeImageProgress = ctx.events?.on?.('IMAGE_GEN_PROGRESS', (payload) => {
-    if (!generating || (payload?.chatId && payload.chatId !== currentChatId())) return
+    if ((!generating && !hasObservedImageRequest()) || (payload?.chatId && payload.chatId !== currentChatId())) return
     const step = Number(payload?.step)
     const total = Number(payload?.totalSteps)
     if (Number.isFinite(step) && Number.isFinite(total) && total > 0) {
@@ -986,6 +1041,8 @@ export function setup(ctx) {
 
   return () => {
     disposed = true
+    if (window.fetch === observeImageFetch) window.fetch = previousFetch
+    observedImageRequests.clear()
     observer.disconnect()
     anchorObserver.disconnect()
     document.removeEventListener('contextmenu', captureContextMenuMessage, true)
