@@ -17,6 +17,26 @@ const SPINNER_ICON = `
     <path d="M21 12a9 9 0 1 1-6.2-8.6"></path>
   </svg>`
 
+// crypto.randomUUID() is unavailable in insecure contexts (plain HTTP on a
+// host machine), so mint a RFC 9562 UUID v4 from crypto.getRandomValues(),
+// which is available everywhere.
+const UUID_HEX = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0'))
+function localUuid() {
+  const bytes = new Uint8Array(16)
+  crypto.getRandomValues(bytes)
+  // Version 4: octet 6 high nibble = 0100
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  // Variant 10: octet 8 high 2 bits = 10
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  return (
+    UUID_HEX[bytes[0]] + UUID_HEX[bytes[1]] + UUID_HEX[bytes[2]] + UUID_HEX[bytes[3]] + '-' +
+    UUID_HEX[bytes[4]] + UUID_HEX[bytes[5]] + '-' +
+    UUID_HEX[bytes[6]] + UUID_HEX[bytes[7]] + '-' +
+    UUID_HEX[bytes[8]] + UUID_HEX[bytes[9]] + '-' +
+    UUID_HEX[bytes[10]] + UUID_HEX[bytes[11]] + UUID_HEX[bytes[12]] + UUID_HEX[bytes[13]] + UUID_HEX[bytes[14]] + UUID_HEX[bytes[15]]
+  )
+}
+
 async function readJson(url, options) {
   const response = await fetch(url, { credentials: 'include', ...options })
   const data = await response.json().catch(() => null)
@@ -649,7 +669,7 @@ export function setup(ctx) {
           bypassActiveLoraPreset: !!settings.bypassActiveLoraPreset,
           loraStrengthScale: settings.loraStrengthScale,
           attachToMessageId,
-          clientJobId: crypto.randomUUID(),
+          clientJobId: localUuid(),
           promptGenerationTimeoutSeconds: settings.promptGenerationTimeoutSeconds,
           generationTimeoutSeconds: settings.generationTimeoutSeconds,
         }),
